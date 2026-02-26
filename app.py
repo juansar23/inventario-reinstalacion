@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
+import pytz
 import os
 
 # =====================================
@@ -8,6 +9,8 @@ import os
 # =====================================
 
 st.set_page_config(page_title="Inventario Reinstalación", layout="wide")
+
+ZONA_HORARIA = "America/Bogota"
 
 ARCHIVO_INVENTARIO = "inventario.csv"
 ARCHIVO_MOVIMIENTOS = "movimientos.csv"
@@ -19,13 +22,16 @@ movimientos_cols = ["Fecha", "Tipo", "Material", "Cantidad", "Responsable"]
 # FUNCIONES
 # =====================================
 
+def ahora():
+    zona = pytz.timezone(ZONA_HORARIA)
+    return datetime.now(zona)
+
 def cargar_csv(nombre, columnas):
     if os.path.exists(nombre):
         df = pd.read_csv(nombre)
     else:
         df = pd.DataFrame(columns=columnas)
 
-    # Si faltan columnas, agregarlas
     for col in columnas:
         if col not in df.columns:
             df[col] = ""
@@ -87,7 +93,7 @@ with st.form("form_agregar"):
                 "Cantidad": cantidad,
                 "Ubicación": ubicacion,
                 "Estado": estado,
-                "Fecha Ingreso": datetime.now().strftime("%Y-%m-%d %H:%M")
+                "Fecha Ingreso": ahora().strftime("%Y-%m-%d %H:%M:%S")
             }
 
             st.session_state.inventario = pd.concat(
@@ -96,7 +102,7 @@ with st.form("form_agregar"):
             )
 
             movimiento = {
-                "Fecha": datetime.now(),
+                "Fecha": ahora().strftime("%Y-%m-%d %H:%M:%S"),
                 "Tipo": "Entrada",
                 "Material": nombre,
                 "Cantidad": cantidad,
@@ -148,7 +154,7 @@ if not st.session_state.inventario.empty:
                     st.session_state.inventario.loc[idx, "Cantidad"] -= cantidad_salida
 
                     movimiento = {
-                        "Fecha": datetime.now(),
+                        "Fecha": ahora().strftime("%Y-%m-%d %H:%M:%S"),
                         "Tipo": "Salida",
                         "Material": material_seleccionado,
                         "Cantidad": cantidad_salida,
