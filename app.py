@@ -16,13 +16,13 @@ ARCHIVO_MOVIMIENTOS = "movimientos.csv"
 ZONA = pytz.timezone("America/Bogota")
 
 inventario_cols = [
-    "ID", "Nombre", "Categoria", "Cantidad",
+    "ID", "Mes", "Nombre", "Categoria", "Cantidad",
     "Precio_Unitario", "Valor_Total",
     "Ubicacion", "Estado", "Fecha_Ingreso", "Proveedor"
 ]
 
 movimientos_cols = [
-    "Fecha", "Tipo", "Material", "Cantidad", "Responsable"
+    "Fecha", "Mes", "Tipo", "Material", "Cantidad", "Responsable"
 ]
 
 # =====================================================
@@ -46,6 +46,9 @@ def guardar_csv(df, nombre):
     df.to_csv(nombre, index=False)
 
 
+def mes_actual():
+    return datetime.now(ZONA).strftime("%Y-%m")
+
 # =====================================================
 # CARGA INICIAL
 # =====================================================
@@ -61,6 +64,8 @@ if "movimientos" not in st.session_state:
 # =====================================================
 
 st.title("Sistema de Inventario Reinstalacion")
+
+mes_act = mes_actual()
 
 # =====================================================
 # AGREGAR MATERIAL
@@ -88,192 +93,101 @@ with st.form("form_agregar"):
 
     if submitted:
 
-        if nombre.strip() == "":
-            st.warning("Debe ingresar un nombre")
-        else:
+        fecha_actual = datetime.now(ZONA).strftime("%Y-%m-%d %H:%M")
 
-            fecha_actual = datetime.now(ZONA).strftime("%Y-%m-%d %H:%M")
+        nuevo_id = 1
+        if not st.session_state.inventario.empty:
+            nuevo_id = int(st.session_state.inventario["ID"].max()) + 1
 
-            existe = st.session_state.inventario[
-                st.session_state.inventario["Nombre"].str.lower() == nombre.lower()
+        nuevo = {
+            "ID": nuevo_id,
+            "Mes": mes_act,
+            "Nombre": nombre,
+            "Categoria": categoria,
+            "Cantidad": cantidad,
+            "Precio_Unitario": precio,
+            "Valor_Total": cantidad * precio,
+            "Ubicacion": ubicacion,
+            "Estado": estado,
+            "Fecha_Ingreso": fecha_actual,
+            "Proveedor": proveedor
+        }
+
+        st.session_state.inventario = pd.concat(
+            [st.session_state.inventario, pd.DataFrame([nuevo])],
+            ignore_index=True
+        )
+
+        movimiento = {
+            "Fecha": fecha_actual,
+            "Mes": mes_act,
+            "Tipo": "Entrada",
+            "Material": nombre,
+            "Cantidad": cantidad,
+            "Responsable": proveedor
+        }
+
+        st.session_state.movimientos = pd.concat(
+            [st.session_state.movimientos, pd.DataFrame([movimiento])],
+            ignore_index=True
+        )
+
+        guardar_csv(st.session_state.inventario, ARCHIVO_INVENTARIO)
+        guardar_csv(st.session_state.movimientos, ARCHIVO_MOVIMIENTOS)
+
+        st.success("Entrada registrada correctamente")
+
+# =====================================================
+# PESTAÑAS POR MES
+# =====================================================
+
+meses = sorted(st.session_state.inventario["Mes"].dropna().unique())
+
+if len(meses) == 0:
+    st.info("No hay datos registrados aun")
+else:
+
+    tabs = st.tabs(meses)
+
+    for i, mes in enumerate(meses):
+
+        with tabs[i]:
+
+            st.subheader(f"Inventario del mes {mes}")
+
+            inv_mes = st.session_state.inventario[
+                st.session_state.inventario["Mes"] == mes
             ]
 
-            if not existe.empty:
-                idx = existe.index[0]
-                st.session_state.inventario.loc[idx, "Cantidad"] += cantidad
-                st.session_state.inventario.loc[idx, "Precio_Unitario"] = precio
-            else:
-                nuevo_id = 1
-                if not st.session_state.inventario.empty:
-                    nuevo_id = int(st.session_state.inventario["ID"].max()) + 1
+            st.dataframe(inv_mes, use_container_width=True)
 
-                nuevo = {
-                    "ID": nuevo_id,
-                    "Nombre": nombre,
-                    "Categoria": categoria,
-                    "Cantidad": cantidad,
-                    "Precio_Unitario": precio,
-                    "Valor_Total": 0,
-                    "Ubicacion": ubicacion,
-                    "Estado": estado,
-                    "Fecha_Ingreso": fecha_actual,
-                    "Proveedor": proveedor
-                }
+            valor_total = inv_mes["Valor_Total"].astype(float).sum()
+            st.markdown(f"### Valor Total Mes {mes}: ${valor_total:,.2f}")
 
-                st.session_state.inventario = pd.concat(
-                    [st.session_state.inventario, pd.DataFrame([nuevo])],
-                    ignore_index=True
+            st.subheader("Movimientos del mes")
+
+            mov_mes = st.session_state.movimientos[
+                st.session_state.movimientos["Mes"] == mes
+            ]
+
+            st.dataframe(mov_mes, use_container_width=True)
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                csv_inv = inv_mes.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    f"Descargar Inventario {mes}",
+                    data=csv_inv,
+                    file_name=f"inventario_{mes}.csv",
+                    mime="text/csv"
                 )
 
-            # Recalcular valor total
-            st.session_state.inventario["Valor_Total"] = (
-                st.session_state.inventario["Cantidad"].astype(float) *
-                st.session_state.inventario["Precio_Unitario"].astype(float)
-            )
-
-            movimiento = {
-                "Fecha": fecha_actual,
-                "Tipo": "Entrada",
-                "Material": nombre,
-                "Cantidad": cantidad,
-                "Responsable": proveedor
-            }
-
-            st.session_state.movimientos = pd.concat(
-                [st.session_state.movimientos, pd.DataFrame([movimiento])],
-                ignore_index=True
-            )
-
-            guardar_csv(st.session_state.inventario, ARCHIVO_INVENTARIO)
-            guardar_csv(st.session_state.movimientos, ARCHIVO_MOVIMIENTOS)
-
-            st.success("Entrada registrada correctamente")
-
-# =====================================================
-# REGISTRAR SALIDA
-# =====================================================
-
-st.subheader("Registrar Salida")
-
-if not st.session_state.inventario.empty:
-
-    material = st.selectbox(
-        "Seleccionar material",
-        st.session_state.inventario["Nombre"]
-    )
-
-    cantidad_salida = st.number_input("Cantidad a retirar", min_value=1, step=1)
-    responsable = st.text_input("A quien se entrego")
-
-    if st.button("Registrar Salida"):
-
-        fila = st.session_state.inventario[
-            st.session_state.inventario["Nombre"] == material
-        ]
-
-        idx = fila.index[0]
-        stock_actual = st.session_state.inventario.loc[idx, "Cantidad"]
-
-        if cantidad_salida > stock_actual:
-            st.error("No hay suficiente stock disponible")
-        else:
-
-            st.session_state.inventario.loc[idx, "Cantidad"] -= cantidad_salida
-
-            # Recalcular valor total
-            st.session_state.inventario["Valor_Total"] = (
-                st.session_state.inventario["Cantidad"].astype(float) *
-                st.session_state.inventario["Precio_Unitario"].astype(float)
-            )
-
-            fecha_actual = datetime.now(ZONA).strftime("%Y-%m-%d %H:%M")
-
-            movimiento = {
-                "Fecha": fecha_actual,
-                "Tipo": "Salida",
-                "Material": material,
-                "Cantidad": cantidad_salida,
-                "Responsable": responsable
-            }
-
-            st.session_state.movimientos = pd.concat(
-                [st.session_state.movimientos, pd.DataFrame([movimiento])],
-                ignore_index=True
-            )
-
-            guardar_csv(st.session_state.inventario, ARCHIVO_INVENTARIO)
-            guardar_csv(st.session_state.movimientos, ARCHIVO_MOVIMIENTOS)
-
-            st.success("Salida registrada correctamente")
-
-# =====================================================
-# INVENTARIO ACTUAL
-# =====================================================
-
-st.subheader("Inventario Actual")
-
-st.dataframe(st.session_state.inventario, use_container_width=True)
-
-valor_total_general = st.session_state.inventario["Valor_Total"].astype(float).sum()
-
-st.markdown(f"### Valor Total del Inventario: ${valor_total_general:,.2f}")
-
-# =====================================================
-# HISTORIAL
-# =====================================================
-
-st.subheader("Historial de Movimientos")
-st.dataframe(st.session_state.movimientos, use_container_width=True)
-
-# =====================================================
-# EXPORTAR DATOS
-# =====================================================
-
-st.subheader("Exportar Datos")
-
-col1, col2 = st.columns(2)
-
-with col1:
-    csv_inv = st.session_state.inventario.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        "Descargar Inventario Actual",
-        data=csv_inv,
-        file_name="inventario_actual.csv",
-        mime="text/csv"
-    )
-
-with col2:
-    salidas = st.session_state.movimientos[
-        st.session_state.movimientos["Tipo"] == "Salida"
-    ]
-
-    csv_sal = salidas.to_csv(index=False).encode("utf-8")
-
-    st.download_button(
-        "Descargar Historial de Salidas",
-        data=csv_sal,
-        file_name="historial_salidas.csv",
-        mime="text/csv"
-    )
-
-# =====================================================
-# RESET INVENTARIO
-# =====================================================
-
-st.subheader("Reset Mensual")
-
-confirmar = st.checkbox("Confirmo reiniciar todo el inventario")
-
-if confirmar:
-    if st.button("Resetear Inventario"):
-
-        st.session_state.inventario = pd.DataFrame(columns=inventario_cols)
-        st.session_state.movimientos = pd.DataFrame(columns=movimientos_cols)
-
-        if os.path.exists(ARCHIVO_INVENTARIO):
-            os.remove(ARCHIVO_INVENTARIO)
-
-        if os.path.exists(ARCHIVO_MOVIMIENTOS):
-            os.remove(ARCHIVO_MOVIMIENTOS)
-
-        st.success("Inventario reiniciado correctamente")
+            with col2:
+                csv_mov = mov_mes.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    f"Descargar Movimientos {mes}",
+                    data=csv_mov,
+                    file_name=f"movimientos_{mes}.csv",
+                    mime="text/csv"
+                )
