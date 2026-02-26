@@ -40,8 +40,13 @@ movimientos_cols = ["Fecha", "Tipo", "Material", "Cantidad", "Responsable"]
 if "inventario" not in st.session_state:
     st.session_state.inventario = cargar_csv(ARCHIVO_INVENTARIO, inventario_cols)
 
-if "movimientos" not in st.session_state:
-    st.session_state.movimientos = cargar_csv(ARCHIVO_MOVIMIENTOS, movimientos_cols)
+if "inventario" not in st.session_state:
+    st.session_state.inventario = cargar_csv(ARCHIVO_INVENTARIO, inventario_cols)
+
+    # 🔥 Si la columna no existe, crearla
+    if "Fecha Ingreso" not in st.session_state.inventario.columns:
+        st.session_state.inventario["Fecha Ingreso"] = ""
+
 
 # ==========================
 # TÍTULO
