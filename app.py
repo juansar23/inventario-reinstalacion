@@ -177,3 +177,36 @@ st.dataframe(st.session_state.inventario, use_container_width=True)
 
 st.subheader("📜 Historial de Movimientos")
 st.dataframe(st.session_state.movimientos, use_container_width=True)
+# ==========================
+# EXPORTAR DATOS
+# ==========================
+
+st.subheader("⬇ Exportar Datos")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    csv_inventario = st.session_state.inventario.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        label="Descargar Inventario Actual",
+        data=csv_inventario,
+        file_name="inventario_actual.csv",
+        mime="text/csv"
+    )
+
+with col2:
+    # Solo exportar salidas
+    salidas = st.session_state.movimientos[
+        st.session_state.movimientos["Tipo"] == "Salida"
+    ]
+
+    csv_salidas = salidas.to_csv(index=False).encode("utf-8")
+
+    st.download_button(
+        label="Descargar Historial de Salidas",
+        data=csv_salidas,
+        file_name="historial_salidas.csv",
+        mime="text/csv"
+    )
+
+
