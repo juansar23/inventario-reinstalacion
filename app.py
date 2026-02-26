@@ -56,13 +56,11 @@ if "inventario" not in st.session_state:
 if "movimientos" not in st.session_state:
     st.session_state.movimientos = cargar_csv(ARCHIVO_MOVIMIENTOS, movimientos_cols)
 
-
 # =====================================================
 # TITULO
 # =====================================================
 
 st.title("Sistema de Inventario Reinstalacion")
-
 
 # =====================================================
 # AGREGAR MATERIAL
@@ -76,8 +74,10 @@ with st.form("form_agregar"):
 
     with col1:
         nombre = st.text_input("Nombre del material")
-        categoria = st.selectbox("Categoria",
-                                 ["Cableado", "Equipos", "Herramientas", "Conectores", "Otros"])
+        categoria = st.selectbox(
+            "Categoria",
+            ["Cableado", "Equipos", "Herramientas", "Conectores", "Otros"]
+        )
         cantidad = st.number_input("Cantidad", min_value=1, step=1)
         precio = st.number_input("Precio unitario", min_value=0.0, step=0.01)
 
@@ -104,6 +104,12 @@ with st.form("form_agregar"):
                 idx = existe.index[0]
                 st.session_state.inventario.loc[idx, "Cantidad"] += cantidad
                 st.session_state.inventario.loc[idx, "Precio_Unitario"] = precio
+
+                st.session_state.inventario.loc[idx, "Valor_Total"] = (
+                    st.session_state.inventario.loc[idx, "Cantidad"] *
+                    st.session_state.inventario.loc[idx, "Precio_Unitario"]
+                )
+
             else:
                 nuevo_id = 1
                 if not st.session_state.inventario.empty:
@@ -115,7 +121,7 @@ with st.form("form_agregar"):
                     "Categoria": categoria,
                     "Cantidad": cantidad,
                     "Precio_Unitario": precio,
-                    "Valor_Total": 0,
+                    "Valor_Total": cantidad * precio,
                     "Ubicacion": ubicacion,
                     "Estado": estado,
                     "Fecha_Ingreso": fecha_actual,
@@ -126,12 +132,6 @@ with st.form("form_agregar"):
                     [st.session_state.inventario, pd.DataFrame([nuevo])],
                     ignore_index=True
                 )
-
-            # Recalcular valor total
-            st.session_state.inventario["Valor_Total"] = (
-                st.session_state.inventario["Cantidad"].astype(float) *
-                st.session_state.inventario["Precio_Unitario"].astype(float)
-            )
 
             movimiento = {
                 "Fecha": fecha_actual,
@@ -150,7 +150,6 @@ with st.form("form_agregar"):
             guardar_csv(st.session_state.movimientos, ARCHIVO_MOVIMIENTOS)
 
             st.success("Entrada registrada correctamente")
-
 
 # =====================================================
 # REGISTRAR SALIDA
@@ -178,15 +177,14 @@ if not st.session_state.inventario.empty:
         stock_actual = st.session_state.inventario.loc[idx, "Cantidad"]
 
         if cantidad_salida > stock_actual:
-            st.error("No hay suficiente stock")
+            st.error("No hay suficiente stock disponible")
         else:
 
             st.session_state.inventario.loc[idx, "Cantidad"] -= cantidad_salida
 
-            # Recalcular valor total
-            st.session_state.inventario["Valor_Total"] = (
-                st.session_state.inventario["Cantidad"].astype(float) *
-                st.session_state.inventario["Precio_Unitario"].astype(float)
+            st.session_state.inventario.loc[idx, "Valor_Total"] = (
+                st.session_state.inventario.loc[idx, "Cantidad"] *
+                st.session_state.inventario.loc[idx, "Precio_Unitario"]
             )
 
             fecha_actual = datetime.now(ZONA).strftime("%Y-%m-%d %H:%M")
@@ -209,7 +207,6 @@ if not st.session_state.inventario.empty:
 
             st.success("Salida registrada correctamente")
 
-
 # =====================================================
 # INVENTARIO ACTUAL
 # =====================================================
@@ -218,11 +215,13 @@ st.subheader("Inventario Actual")
 
 st.dataframe(st.session_state.inventario, use_container_width=True)
 
-# Valor total general
-valor_total_inventario = st.session_state.inventario["Valor_Total"].astype(float).sum()
+valor_total_general = (
+    st.session_state.inventario["Valor_Total"]
+    .astype(float)
+    .sum()
+)
 
-st.markdown(f"## Valor Total del Inventario: ${valor_total_inventario:,.2f}")
-
+st.markdown(f"### Valor Total del Inventario: ${valor_total_general:,.2f}")
 
 # =====================================================
 # HISTORIAL
