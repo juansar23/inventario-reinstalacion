@@ -215,4 +215,26 @@ with col2:
         mime="text/csv"
     )
 
+# ==========================
+# RESETEAR INVENTARIO MENSUAL
+# ==========================
+
+st.subheader("🔄 Resetear Inventario Mensual")
+
+st.warning("⚠ Esta acción eliminará todo el inventario y el historial de movimientos.")
+
+if st.button("Resetear Inventario"):
+
+    # Reiniciar en memoria
+    st.session_state.inventario = pd.DataFrame(columns=inventario_cols)
+    st.session_state.movimientos = pd.DataFrame(columns=movimientos_cols)
+
+    # Borrar archivos físicos si existen
+    if os.path.exists(ARCHIVO_INVENTARIO):
+        os.remove(ARCHIVO_INVENTARIO)
+
+    if os.path.exists(ARCHIVO_MOVIMIENTOS):
+        os.remove(ARCHIVO_MOVIMIENTOS)
+
+    st.success("Inventario reiniciado correctamente. Ya puedes comenzar el nuevo mes.")
 
