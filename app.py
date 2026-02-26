@@ -29,7 +29,8 @@ def guardar_csv(df, nombre):
 # DEFINIR COLUMNAS
 # ==========================
 
-inventario_cols = ["ID", "Nombre", "Categoría", "Cantidad", "Ubicación", "Estado"]
+inventario_cols = ["ID", "Nombre", "Categoría", "Cantidad", "Ubicación", "Estado", "Fecha Ingreso"]
+
 movimientos_cols = ["Fecha", "Tipo", "Material", "Cantidad", "Responsable"]
 
 # ==========================
