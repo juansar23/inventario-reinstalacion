@@ -3,60 +3,57 @@ import pandas as pd
 from datetime import datetime
 import os
 
-# ==========================
+# =====================================
 # CONFIGURACIÓN
-# ==========================
+# =====================================
 
 st.set_page_config(page_title="Inventario Reinstalación", layout="wide")
 
 ARCHIVO_INVENTARIO = "inventario.csv"
 ARCHIVO_MOVIMIENTOS = "movimientos.csv"
 
-# ==========================
+inventario_cols = ["ID", "Nombre", "Categoría", "Cantidad", "Ubicación", "Estado", "Fecha Ingreso"]
+movimientos_cols = ["Fecha", "Tipo", "Material", "Cantidad", "Responsable"]
+
+# =====================================
 # FUNCIONES
-# ==========================
+# =====================================
 
 def cargar_csv(nombre, columnas):
     if os.path.exists(nombre):
-        return pd.read_csv(nombre)
+        df = pd.read_csv(nombre)
     else:
-        return pd.DataFrame(columns=columnas)
+        df = pd.DataFrame(columns=columnas)
+
+    # Si faltan columnas, agregarlas
+    for col in columnas:
+        if col not in df.columns:
+            df[col] = ""
+
+    return df
 
 def guardar_csv(df, nombre):
     df.to_csv(nombre, index=False)
 
-# ==========================
-# DEFINIR COLUMNAS
-# ==========================
-
-inventario_cols = ["ID", "Nombre", "Categoría", "Cantidad", "Ubicación", "Estado", "Fecha Ingreso"]
-
-movimientos_cols = ["Fecha", "Tipo", "Material", "Cantidad", "Responsable"]
-
-# ==========================
-# CARGAR DATOS EN MEMORIA
-# ==========================
+# =====================================
+# CARGAR DATOS
+# =====================================
 
 if "inventario" not in st.session_state:
     st.session_state.inventario = cargar_csv(ARCHIVO_INVENTARIO, inventario_cols)
 
-if "inventario" not in st.session_state:
-    st.session_state.inventario = cargar_csv(ARCHIVO_INVENTARIO, inventario_cols)
+if "movimientos" not in st.session_state:
+    st.session_state.movimientos = cargar_csv(ARCHIVO_MOVIMIENTOS, movimientos_cols)
 
-    # 🔥 Si la columna no existe, crearla
-    if "Fecha Ingreso" not in st.session_state.inventario.columns:
-        st.session_state.inventario["Fecha Ingreso"] = ""
-
-
-# ==========================
+# =====================================
 # TÍTULO
-# ==========================
+# =====================================
 
 st.title("📦 Sistema de Inventario - Reinstalación")
 
-# ==========================
+# =====================================
 # AGREGAR MATERIAL
-# ==========================
+# =====================================
 
 st.subheader("➕ Agregar Material")
 
@@ -89,7 +86,8 @@ with st.form("form_agregar"):
                 "Categoría": categoria,
                 "Cantidad": cantidad,
                 "Ubicación": ubicacion,
-                "Estado": estado
+                "Estado": estado,
+                "Fecha Ingreso": datetime.now().strftime("%Y-%m-%d %H:%M")
             }
 
             st.session_state.inventario = pd.concat(
@@ -115,9 +113,9 @@ with st.form("form_agregar"):
 
             st.success("Material agregado correctamente")
 
-# ==========================
+# =====================================
 # REGISTRAR SALIDA
-# ==========================
+# =====================================
 
 st.subheader("📤 Registrar Salida de Material")
 
@@ -170,22 +168,23 @@ if not st.session_state.inventario.empty:
                 else:
                     st.error("No hay suficiente stock disponible")
 
-# ==========================
+# =====================================
 # INVENTARIO ACTUAL
-# ==========================
+# =====================================
 
 st.subheader("📋 Inventario Actual")
 st.dataframe(st.session_state.inventario, use_container_width=True)
 
-# ==========================
-# HISTORIAL DE MOVIMIENTOS
-# ==========================
+# =====================================
+# HISTORIAL
+# =====================================
 
 st.subheader("📜 Historial de Movimientos")
 st.dataframe(st.session_state.movimientos, use_container_width=True)
-# ==========================
+
+# =====================================
 # EXPORTAR DATOS
-# ==========================
+# =====================================
 
 st.subheader("⬇ Exportar Datos")
 
@@ -201,7 +200,6 @@ with col1:
     )
 
 with col2:
-    # Solo exportar salidas
     salidas = st.session_state.movimientos[
         st.session_state.movimientos["Tipo"] == "Salida"
     ]
@@ -215,26 +213,24 @@ with col2:
         mime="text/csv"
     )
 
-# ==========================
-# RESETEAR INVENTARIO MENSUAL
-# ==========================
+# =====================================
+# RESETEAR INVENTARIO
+# =====================================
 
 st.subheader("🔄 Resetear Inventario Mensual")
 
-st.warning("⚠ Esta acción eliminará todo el inventario y el historial de movimientos.")
+confirmar = st.checkbox("Confirmo que deseo reiniciar el inventario completamente")
 
-if st.button("Resetear Inventario"):
+if confirmar:
+    if st.button("Resetear Inventario"):
 
-    # Reiniciar en memoria
-    st.session_state.inventario = pd.DataFrame(columns=inventario_cols)
-    st.session_state.movimientos = pd.DataFrame(columns=movimientos_cols)
+        st.session_state.inventario = pd.DataFrame(columns=inventario_cols)
+        st.session_state.movimientos = pd.DataFrame(columns=movimientos_cols)
 
-    # Borrar archivos físicos si existen
-    if os.path.exists(ARCHIVO_INVENTARIO):
-        os.remove(ARCHIVO_INVENTARIO)
+        if os.path.exists(ARCHIVO_INVENTARIO):
+            os.remove(ARCHIVO_INVENTARIO)
 
-    if os.path.exists(ARCHIVO_MOVIMIENTOS):
-        os.remove(ARCHIVO_MOVIMIENTOS)
+        if os.path.exists(ARCHIVO_MOVIMIENTOS):
+            os.remove(ARCHIVO_MOVIMIENTOS)
 
-    st.success("Inventario reiniciado correctamente. Ya puedes comenzar el nuevo mes.")
-
+        st.success("Inventario reiniciado correctamente. Ya puedes comenzar el nuevo mes.")
