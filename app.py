@@ -5,26 +5,22 @@ import pytz
 import os
 
 # =====================================
-# CONFIGURACIÓN
+# CONFIGURACION
 # =====================================
 
-st.set_page_config(page_title="Inventario Reinstalación", layout="wide")
-
-ZONA_HORARIA = "America/Bogota"
+st.set_page_config(page_title="Sistema Inventario Reinstalacion", layout="wide")
 
 ARCHIVO_INVENTARIO = "inventario.csv"
 ARCHIVO_MOVIMIENTOS = "movimientos.csv"
 
-inventario_cols = ["ID", "Nombre", "Categoría", "Cantidad", "Ubicación", "Estado", "Fecha Ingreso"]
+ZONA = pytz.timezone("America/Bogota")
+
+inventario_cols = ["ID", "Nombre", "Categoria", "Cantidad", "Ubicacion", "Estado", "Fecha_Ingreso", "Proveedor"]
 movimientos_cols = ["Fecha", "Tipo", "Material", "Cantidad", "Responsable"]
 
 # =====================================
 # FUNCIONES
 # =====================================
-
-def ahora():
-    zona = pytz.timezone(ZONA_HORARIA)
-    return datetime.now(zona)
 
 def cargar_csv(nombre, columnas):
     if os.path.exists(nombre):
@@ -52,29 +48,30 @@ if "movimientos" not in st.session_state:
     st.session_state.movimientos = cargar_csv(ARCHIVO_MOVIMIENTOS, movimientos_cols)
 
 # =====================================
-# TÍTULO
+# TITULO
 # =====================================
 
-st.title("📦 Sistema de Inventario - Reinstalación")
+st.title("Sistema de Inventario Reinstalacion")
 
 # =====================================
 # AGREGAR MATERIAL
 # =====================================
 
-st.subheader("➕ Agregar Material")
+st.subheader("Agregar Material")
 
 with st.form("form_agregar"):
     col1, col2 = st.columns(2)
 
     with col1:
         nombre = st.text_input("Nombre del material")
-        categoria = st.selectbox("Categoría",
+        categoria = st.selectbox("Categoria",
                                  ["Cableado", "Equipos", "Herramientas", "Conectores", "Otros"])
         cantidad = st.number_input("Cantidad", min_value=1, step=1)
 
     with col2:
-        ubicacion = st.text_input("Ubicación")
-        estado = st.selectbox("Estado", ["Nuevo", "Usado", "Dañado"])
+        ubicacion = st.text_input("Ubicacion")
+        estado = st.selectbox("Estado", ["Nuevo", "Usado", "Danado"])
+        proveedor = st.text_input("Quien entrego el material")
 
     submitted = st.form_submit_button("Agregar")
 
@@ -86,14 +83,17 @@ with st.form("form_agregar"):
             if not st.session_state.inventario.empty:
                 nuevo_id = int(st.session_state.inventario["ID"].max()) + 1
 
+            fecha_actual = datetime.now(ZONA).strftime("%Y-%m-%d %H:%M")
+
             nuevo = {
                 "ID": nuevo_id,
                 "Nombre": nombre,
-                "Categoría": categoria,
+                "Categoria": categoria,
                 "Cantidad": cantidad,
-                "Ubicación": ubicacion,
+                "Ubicacion": ubicacion,
                 "Estado": estado,
-                "Fecha Ingreso": ahora().strftime("%Y-%m-%d %H:%M:%S")
+                "Fecha_Ingreso": fecha_actual,
+                "Proveedor": proveedor
             }
 
             st.session_state.inventario = pd.concat(
@@ -102,11 +102,11 @@ with st.form("form_agregar"):
             )
 
             movimiento = {
-                "Fecha": ahora().strftime("%Y-%m-%d %H:%M:%S"),
+                "Fecha": fecha_actual,
                 "Tipo": "Entrada",
                 "Material": nombre,
                 "Cantidad": cantidad,
-                "Responsable": "Sistema"
+                "Responsable": proveedor
             }
 
             st.session_state.movimientos = pd.concat(
@@ -123,7 +123,7 @@ with st.form("form_agregar"):
 # REGISTRAR SALIDA
 # =====================================
 
-st.subheader("📤 Registrar Salida de Material")
+st.subheader("Registrar Salida de Material")
 
 if not st.session_state.inventario.empty:
 
@@ -133,12 +133,12 @@ if not st.session_state.inventario.empty:
     )
 
     cantidad_salida = st.number_input("Cantidad a retirar", min_value=1, step=1)
-    responsable = st.text_input("¿A quién se le entregó?")
+    responsable = st.text_input("A quien se entrego")
 
     if st.button("Registrar Salida"):
 
         if responsable.strip() == "":
-            st.warning("Debe indicar a quién se entregó")
+            st.warning("Debe indicar a quien se entrego")
         else:
             fila = st.session_state.inventario[
                 st.session_state.inventario["Nombre"] == material_seleccionado
@@ -153,8 +153,10 @@ if not st.session_state.inventario.empty:
 
                     st.session_state.inventario.loc[idx, "Cantidad"] -= cantidad_salida
 
+                    fecha_actual = datetime.now(ZONA).strftime("%Y-%m-%d %H:%M")
+
                     movimiento = {
-                        "Fecha": ahora().strftime("%Y-%m-%d %H:%M:%S"),
+                        "Fecha": fecha_actual,
                         "Tipo": "Salida",
                         "Material": material_seleccionado,
                         "Cantidad": cantidad_salida,
@@ -178,28 +180,28 @@ if not st.session_state.inventario.empty:
 # INVENTARIO ACTUAL
 # =====================================
 
-st.subheader("📋 Inventario Actual")
+st.subheader("Inventario Actual")
 st.dataframe(st.session_state.inventario, use_container_width=True)
 
 # =====================================
 # HISTORIAL
 # =====================================
 
-st.subheader("📜 Historial de Movimientos")
+st.subheader("Historial de Movimientos")
 st.dataframe(st.session_state.movimientos, use_container_width=True)
 
 # =====================================
-# EXPORTAR DATOS
+# EXPORTAR
 # =====================================
 
-st.subheader("⬇ Exportar Datos")
+st.subheader("Exportar Datos")
 
 col1, col2 = st.columns(2)
 
 with col1:
     csv_inventario = st.session_state.inventario.to_csv(index=False).encode("utf-8")
     st.download_button(
-        label="Descargar Inventario Actual",
+        label="Descargar Inventario",
         data=csv_inventario,
         file_name="inventario_actual.csv",
         mime="text/csv"
@@ -213,7 +215,7 @@ with col2:
     csv_salidas = salidas.to_csv(index=False).encode("utf-8")
 
     st.download_button(
-        label="Descargar Historial de Salidas",
+        label="Descargar Historial Salidas",
         data=csv_salidas,
         file_name="historial_salidas.csv",
         mime="text/csv"
@@ -223,9 +225,9 @@ with col2:
 # RESETEAR INVENTARIO
 # =====================================
 
-st.subheader("🔄 Resetear Inventario Mensual")
+st.subheader("Resetear Inventario Mensual")
 
-confirmar = st.checkbox("Confirmo que deseo reiniciar el inventario completamente")
+confirmar = st.checkbox("Confirmo reiniciar el inventario completamente")
 
 if confirmar:
     if st.button("Resetear Inventario"):
@@ -239,4 +241,4 @@ if confirmar:
         if os.path.exists(ARCHIVO_MOVIMIENTOS):
             os.remove(ARCHIVO_MOVIMIENTOS)
 
-        st.success("Inventario reiniciado correctamente. Ya puedes comenzar el nuevo mes.")
+        st.success("Inventario reiniciado correctamente")
