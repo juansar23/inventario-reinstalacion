@@ -74,8 +74,10 @@ with st.form("form_agregar"):
 
     with col1:
         nombre = st.text_input("Nombre del material")
-        categoria = st.selectbox("Categoria",
-                                 ["Cableado", "Equipos", "Herramientas", "Conectores", "Otros"])
+        categoria = st.selectbox(
+            "Categoria",
+            ["Cableado", "Equipos", "Herramientas", "Conectores", "Otros"]
+        )
         cantidad = st.number_input("Cantidad", min_value=1, step=1)
         precio = st.number_input("Precio unitario", min_value=0.0, step=0.01)
 
@@ -102,6 +104,12 @@ with st.form("form_agregar"):
                 idx = existe.index[0]
                 st.session_state.inventario.loc[idx, "Cantidad"] += cantidad
                 st.session_state.inventario.loc[idx, "Precio_Unitario"] = precio
+
+                st.session_state.inventario.loc[idx, "Valor_Total"] = (
+                    st.session_state.inventario.loc[idx, "Cantidad"] *
+                    st.session_state.inventario.loc[idx, "Precio_Unitario"]
+                )
+
             else:
                 nuevo_id = 1
                 if not st.session_state.inventario.empty:
@@ -113,7 +121,7 @@ with st.form("form_agregar"):
                     "Categoria": categoria,
                     "Cantidad": cantidad,
                     "Precio_Unitario": precio,
-                    "Valor_Total": 0,
+                    "Valor_Total": cantidad * precio,
                     "Ubicacion": ubicacion,
                     "Estado": estado,
                     "Fecha_Ingreso": fecha_actual,
@@ -124,12 +132,6 @@ with st.form("form_agregar"):
                     [st.session_state.inventario, pd.DataFrame([nuevo])],
                     ignore_index=True
                 )
-
-            # Recalcular valor total
-            st.session_state.inventario["Valor_Total"] = (
-                st.session_state.inventario["Cantidad"].astype(float) *
-                st.session_state.inventario["Precio_Unitario"].astype(float)
-            )
 
             movimiento = {
                 "Fecha": fecha_actual,
@@ -180,10 +182,9 @@ if not st.session_state.inventario.empty:
 
             st.session_state.inventario.loc[idx, "Cantidad"] -= cantidad_salida
 
-            # Recalcular valor total
-            st.session_state.inventario["Valor_Total"] = (
-                st.session_state.inventario["Cantidad"].astype(float) *
-                st.session_state.inventario["Precio_Unitario"].astype(float)
+            st.session_state.inventario.loc[idx, "Valor_Total"] = (
+                st.session_state.inventario.loc[idx, "Cantidad"] *
+                st.session_state.inventario.loc[idx, "Precio_Unitario"]
             )
 
             fecha_actual = datetime.now(ZONA).strftime("%Y-%m-%d %H:%M")
@@ -214,7 +215,11 @@ st.subheader("Inventario Actual")
 
 st.dataframe(st.session_state.inventario, use_container_width=True)
 
-valor_total_general = st.session_state.inventario["Valor_Total"].astype(float).sum()
+valor_total_general = (
+    st.session_state.inventario["Valor_Total"]
+    .astype(float)
+    .sum()
+)
 
 st.markdown(f"### Valor Total del Inventario: ${valor_total_general:,.2f}")
 
@@ -224,56 +229,3 @@ st.markdown(f"### Valor Total del Inventario: ${valor_total_general:,.2f}")
 
 st.subheader("Historial de Movimientos")
 st.dataframe(st.session_state.movimientos, use_container_width=True)
-
-# =====================================================
-# EXPORTAR DATOS
-# =====================================================
-
-st.subheader("Exportar Datos")
-
-col1, col2 = st.columns(2)
-
-with col1:
-    csv_inv = st.session_state.inventario.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        "Descargar Inventario Actual",
-        data=csv_inv,
-        file_name="inventario_actual.csv",
-        mime="text/csv"
-    )
-
-with col2:
-    salidas = st.session_state.movimientos[
-        st.session_state.movimientos["Tipo"] == "Salida"
-    ]
-
-    csv_sal = salidas.to_csv(index=False).encode("utf-8")
-
-    st.download_button(
-        "Descargar Historial de Salidas",
-        data=csv_sal,
-        file_name="historial_salidas.csv",
-        mime="text/csv"
-    )
-
-# =====================================================
-# RESET INVENTARIO
-# =====================================================
-
-st.subheader("Reset Mensual")
-
-confirmar = st.checkbox("Confirmo reiniciar todo el inventario")
-
-if confirmar:
-    if st.button("Resetear Inventario"):
-
-        st.session_state.inventario = pd.DataFrame(columns=inventario_cols)
-        st.session_state.movimientos = pd.DataFrame(columns=movimientos_cols)
-
-        if os.path.exists(ARCHIVO_INVENTARIO):
-            os.remove(ARCHIVO_INVENTARIO)
-
-        if os.path.exists(ARCHIVO_MOVIMIENTOS):
-            os.remove(ARCHIVO_MOVIMIENTOS)
-
-        st.success("Inventario reiniciado correctamente")
