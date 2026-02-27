@@ -4,25 +4,24 @@ import io
 from datetime import datetime
 
 # Configuración de la página
-st.set_page_config(page_title="Sistema Integrado de Inventario UT", layout="wide")
+st.set_page_config(page_title="Sistema de Gestión UT", layout="wide")
 
 # ==================================================
 # 1. PERSISTENCIA DE DATOS (Session State)
 # ==================================================
-# Bases de datos de Materiales
+if 'db_materiales_operarios' not in st.session_state:
+    # Movimientos: INICIAL, BODEGA (Suma) y ACTA (Resta)
+    st.session_state.db_materiales_operarios = pd.DataFrame(
+        columns=["Fecha", "Tipo_Movimiento", "Operario", "Material", "Cantidad", "Referencia/Acta"]
+    )
+
 if 'db_materiales_bodega' not in st.session_state:
     st.session_state.db_materiales_bodega = pd.DataFrame(columns=["Fecha", "Material", "Cantidad", "Origen"])
-if 'db_materiales_operarios' not in st.session_state:
-    # Incluye Inventario Inicial y Entregas desde Bodega
-    st.session_state.db_materiales_operarios = pd.DataFrame(columns=["Fecha", "Tipo_Carga", "Operario", "Material", "Cantidad", "ID_Serie"])
 
-# Bases de datos de Herramientas
-if 'db_herramientas_bodega' not in st.session_state:
-    st.session_state.db_herramientas_bodega = pd.DataFrame(columns=["Fecha", "Herramienta", "Cantidad", "Estado"])
 if 'db_herramientas_operarios' not in st.session_state:
     st.session_state.db_herramientas_operarios = pd.DataFrame(columns=["Fecha", "Operario", "Herramienta", "Cantidad", "ID_Serie"])
 
-# Listas de Catálogo (Tú las llenas)
+# Catálogos
 if 'cat_materiales' not in st.session_state: st.session_state.cat_materiales = []
 if 'cat_herramientas' not in st.session_state: st.session_state.cat_herramientas = []
 if 'cat_operarios' not in st.session_state: st.session_state.cat_operarios = []
@@ -33,141 +32,170 @@ if 'cat_operarios' not in st.session_state: st.session_state.cat_operarios = []
 def convertir_a_csv(df):
     return df.to_csv(index=False).encode('utf-8')
 
-def obtener_stock_operarios(tipo="MATERIAL"):
-    db = st.session_state.db_materiales_operarios if tipo == "MATERIAL" else st.session_state.db_herramientas_operarios
-    if db.empty: return pd.DataFrame()
-    return db.groupby(["Operario", "Material" if tipo=="MATERIAL" else "Herramienta"])["Cantidad"].sum().reset_index()
+def obtener_stock_real_operarios():
+    if st.session_state.db_materiales_operarios.empty:
+        return pd.DataFrame(columns=["Operario", "Material", "Stock Actual"])
+    
+    df = st.session_state.db_materiales_operarios.copy()
+    # Los movimientos tipo ACTA restan, los demás suman
+    df['Cantidad_Neta'] = df.apply(lambda x: -x['Cantidad'] if x['Tipo_Movimiento'] == "ACTA" else x['Cantidad'], axis=1)
+    
+    resumen = df.groupby(["Operario", "Material"])["Cantidad_Neta"].sum().reset_index()
+    resumen.rename(columns={"Cantidad_Neta": "Stock Actual"}, inplace=True)
+    return resumen
 
 # ==================================================
-# 3. INTERFAZ: CONFIGURACIÓN (BARRA LATERAL)
+# 3. BARRA LATERAL (CONFIGURACIÓN)
 # ==================================================
 with st.sidebar:
-    st.header("⚙️ Configuración Maestra")
+    st.header("⚙️ Configuración")
     
-    # Registro de Operarios
-    st.subheader("👥 Registro de Operarios")
-    nuevo_op = st.text_input("Nombre del Operario")
-    if st.button("Añadir Operario") and nuevo_op:
-        op_nom = nuevo_op.strip().upper()
-        if op_nom not in st.session_state.cat_operarios:
-            st.session_state.cat_operarios.append(op_nom)
+    op_input = st.text_input("Añadir Operario")
+    if st.button("Registrar Operario") and op_input:
+        nombre = op_input.strip().upper()
+        if nombre not in st.session_state.cat_operarios:
+            st.session_state.cat_operarios.append(nombre)
             st.rerun()
 
-    # Registro de Materiales
-    st.subheader("📦 Catálogo de Materiales")
-    nuevo_mat = st.text_input("Nombre del Material")
-    if st.button("Añadir Material") and nuevo_mat:
-        mat_nom = nuevo_mat.strip().upper()
-        if mat_nom not in st.session_state.cat_materiales:
-            st.session_state.cat_materiales.append(mat_nom)
+    mat_input = st.text_input("Añadir Material")
+    if st.button("Registrar Material") and mat_input:
+        nombre = mat_input.strip().upper()
+        if nombre not in st.session_state.cat_materiales:
+            st.session_state.cat_materiales.append(nombre)
             st.rerun()
 
-    # Registro de Herramientas
-    st.subheader("🛠️ Catálogo de Herramientas")
-    nueva_herr = st.text_input("Nombre de Herramienta")
-    if st.button("Añadir Herramienta") and nueva_herr:
-        herr_nom = nueva_herr.strip().upper()
-        if herr_nom not in st.session_state.cat_herramientas:
-            st.session_state.cat_herramientas.append(herr_nom)
+    herr_input = st.text_input("Añadir Herramienta")
+    if st.button("Registrar Herramienta") and herr_input:
+        nombre = herr_input.strip().upper()
+        if nombre not in st.session_state.cat_herramientas:
+            st.session_state.cat_herramientas.append(nombre)
             st.rerun()
 
     st.divider()
-    if st.button("🚨 Borrar Todo"):
+    if st.button("🚨 Reiniciar Sistema"):
         st.session_state.clear()
         st.rerun()
 
 # ==================================================
-# 4. CUERPO PRINCIPAL (TABS)
+# 4. CUERPO PRINCIPAL
 # ==================================================
-st.title("🛡️ Sistema de Control de Inventario y Herramientas")
+st.title("🛡️ Control de Inventario y Actas de Operarios")
 
-tab_ops, tab_bodega, tab_herr = st.tabs(["👷 Inventario Operarios", "🏢 Bodega Materiales", "🛠️ Herramientas"])
+tab_resumen, tab_inicial, tab_actas, tab_bodega, tab_herr = st.tabs([
+    "📊 Resumen de Stock", 
+    "📥 Carga Inicial", 
+    "📄 Consumo (Actas)", 
+    "🏢 Bodega", 
+    "🛠️ Herramientas"
+])
 
-# --- TAB: OPERARIOS (INVENTARIO INICIAL Y RESUMEN) ---
-with tab_ops:
-    col_a, col_b = st.columns([1, 2])
+# --- TAB: RESUMEN (STOCK ACTUAL EN CALLE) ---
+with tab_resumen:
+    st.subheader("Estado Actual de Materiales por Operario")
+    df_resumen = obtener_stock_real_operarios()
+    if not df_resumen.empty:
+        st.dataframe(df_resumen, use_container_width=True, hide_index=True)
+        st.download_button("📥 Descargar Inventario Calle (CSV)", convertir_a_csv(df_resumen), "stock_operarios.csv")
+    else:
+        st.info("No hay materiales asignados.")
+
+# --- TAB: CARGA INICIAL ---
+with tab_inicial:
+    st.subheader("Registrar Inventario Inicial del Operario")
+    with st.form("form_inicial", clear_on_submit=True):
+        col1, col2 = st.columns(2)
+        op_i = col1.selectbox("Operario", st.session_state.cat_operarios, key="op_i")
+        mat_i = col1.selectbox("Material", st.session_state.cat_materiales, key="mat_i")
+        cant_i = col2.number_input("Cantidad Inicial", min_value=1, step=1)
+        ref_i = col2.text_input("Referencia (Opcional)", "Inventario Inicial")
+        
+        if st.form_submit_button("Cargar Stock Inicial"):
+            nueva_fila = pd.DataFrame([[datetime.now().date(), "INICIAL", op_i, mat_i, cant_i, ref_i]], 
+                                     columns=st.session_state.db_materiales_operarios.columns)
+            st.session_state.db_materiales_operarios = pd.concat([st.session_state.db_materiales_operarios, nueva_fila], ignore_index=True)
+            st.success("Cargado con éxito")
+            st.rerun()
+
+# --- TAB: ACTAS (RESTAR MATERIAL) ---
+with tab_actas:
+    st.subheader("📄 Registro de Consumo por Acta")
+    st.write("Utilice esta sección para restar el material que el operario ya instaló o utilizó.")
     
-    with col_a:
-        st.subheader("📥 Cargar Inventario Inicial")
-        if not st.session_state.cat_operarios or not st.session_state.cat_materiales:
-            st.warning("Primero registre operarios y materiales en la barra lateral.")
-        else:
-            with st.form("form_inv_inicial"):
-                op_sel = st.selectbox("Operario", st.session_state.cat_operarios)
-                mat_sel = st.selectbox("Material", st.session_state.cat_materiales)
-                cant_ini = st.number_input("Cantidad Inicial", min_value=1, step=1)
-                serie_ini = st.text_input("Serie/ID (Opcional)")
-                if st.form_submit_button("Registrar Stock Inicial"):
-                    nueva_data = pd.DataFrame([[datetime.now().date(), "INICIAL", op_sel, mat_sel, cant_ini, serie_ini]], 
-                                             columns=st.session_state.db_materiales_operarios.columns)
-                    st.session_state.db_materiales_operarios = pd.concat([st.session_state.db_materiales_operarios, nueva_data], ignore_index=True)
-                    st.success("Cargado correctamente")
-                    st.rerun()
-
-    with col_b:
-        st.subheader("📋 Resumen de Stock en Calle")
-        resumen_op = obtener_stock_operarios("MATERIAL")
-        if not resumen_op.empty:
-            st.dataframe(resumen_op, use_container_width=True, hide_index=True)
-            st.download_button("📥 Descargar Reporte Operarios CSV", convertir_a_csv(resumen_op), "inventario_operarios.csv")
-        else:
-            st.info("No hay datos registrados.")
-
-# --- TAB: BODEGA MATERIALES ---
-with tab_bodega:
-    st.subheader("Gestión de Bodega Central")
-    c1, c2 = st.columns(2)
+    df_val = obtener_stock_real_operarios()
     
-    with c1:
-        st.write("**Cargar entrada a bodega**")
-        with st.form("ent_bodega", clear_on_submit=True):
-            m_b = st.selectbox("Material", st.session_state.cat_materiales)
-            c_b = st.number_input("Cantidad", min_value=1)
-            o_b = st.text_input("Origen")
-            if st.form_submit_button("📥 Ingresar a Bodega"):
-                nueva_ent = pd.DataFrame([[datetime.now().date(), m_b, c_b, o_b]], columns=st.session_state.db_materiales_bodega.columns)
-                st.session_state.db_materiales_bodega = pd.concat([st.session_state.db_materiales_bodega, nueva_ent], ignore_index=True)
+    with st.form("form_acta", clear_on_submit=True):
+        c1, c2 = st.columns(2)
+        op_a = c1.selectbox("Operario que reporta", st.session_state.cat_operarios)
+        
+        # Filtrar materiales que realmente tiene el operario
+        mats_op = df_val[df_val["Operario"] == op_a]["Material"].unique()
+        mat_a = c1.selectbox("Material utilizado", mats_op if len(mats_op)>0 else ["Sin stock"])
+        
+        # Mostrar cuánto tiene antes de restar
+        if len(mats_op) > 0:
+            actual = df_val[(df_val["Operario"] == op_a) & (df_val["Material"] == mat_a)]["Stock Actual"].values[0]
+            c1.info(f"Stock actual del operario: {int(actual)}")
+        
+        cant_a = c2.number_input("Cantidad utilizada (A restar)", min_value=1, step=1)
+        num_acta = c2.text_input("Número de Acta / Orden")
+        
+        if st.form_submit_button("🔥 Registrar Consumo (Restar)"):
+            if len(mats_op) == 0:
+                st.error("El operario no tiene materiales asignados.")
+            elif cant_a > actual:
+                st.error(f"Error: El operario solo tiene {int(actual)} unidades.")
+            else:
+                nueva_acta = pd.DataFrame([[datetime.now().date(), "ACTA", op_a, mat_a, cant_a, num_acta]], 
+                                         columns=st.session_state.db_materiales_operarios.columns)
+                st.session_state.db_materiales_operarios = pd.concat([st.session_state.db_materiales_operarios, nueva_acta], ignore_index=True)
+                st.success(f"Se restaron {cant_a} unidades a {op_a} por el acta {num_acta}")
                 st.rerun()
 
-    with c2:
-        st.write("**Entregar desde bodega a operario**")
-        with st.form("sal_bodega", clear_on_submit=True):
-            op_s = st.selectbox("Operario Destino", st.session_state.cat_operarios)
-            mat_s = st.selectbox("Material a Entregar", st.session_state.cat_materiales)
-            cant_s = st.number_input("Cantidad", min_value=1)
-            if st.form_submit_button("📤 Entregar Material"):
-                # Lógica simplificada: Se registra en operarios como "BODEGA"
-                nueva_sal = pd.DataFrame([[datetime.now().date(), "BODEGA", op_s, mat_s, cant_s, "N/A"]], 
+# --- TAB: BODEGA ---
+with tab_bodega:
+    st.subheader("Movimientos de Bodega Central")
+    col_b1, col_b2 = st.columns(2)
+    
+    with col_b1:
+        st.write("**Entrada a Bodega**")
+        with st.form("b_ent"):
+            m_b = st.selectbox("Material", st.session_state.cat_materiales)
+            c_b = st.number_input("Cantidad", min_value=1)
+            if st.form_submit_button("Ingresar"):
+                st.session_state.db_materiales_bodega = pd.concat([st.session_state.db_materiales_bodega, 
+                    pd.DataFrame([[datetime.now().date(), m_b, c_b, "Compra/Ingreso"]], columns=st.session_state.db_materiales_bodega.columns)], ignore_index=True)
+                st.rerun()
+
+    with col_b2:
+        st.write("**Entrega Bodega -> Operario**")
+        with st.form("b_sal"):
+            op_d = st.selectbox("Operario Destino", st.session_state.cat_operarios)
+            mat_d = st.selectbox("Material", st.session_state.cat_materiales)
+            cant_d = st.number_input("Cantidad", min_value=1)
+            if st.form_submit_button("Entregar"):
+                # Sumar al operario
+                nueva_ent = pd.DataFrame([[datetime.now().date(), "BODEGA", op_d, mat_d, cant_d, "Entrega Bodega"]], 
                                          columns=st.session_state.db_materiales_operarios.columns)
-                st.session_state.db_materiales_operarios = pd.concat([st.session_state.db_materiales_operarios, nueva_sal], ignore_index=True)
-                # Restar de bodega (se registra como entrada negativa para el cálculo)
-                restar_bod = pd.DataFrame([[datetime.now().date(), mat_s, -cant_s, f"Entrega a {op_s}"]], columns=st.session_state.db_materiales_bodega.columns)
-                st.session_state.db_materiales_bodega = pd.concat([st.session_state.db_materiales_bodega, restar_bod], ignore_index=True)
+                st.session_state.db_materiales_operarios = pd.concat([st.session_state.db_materiales_operarios, nueva_ent], ignore_index=True)
+                # Restar de bodega
+                nueva_rest = pd.DataFrame([[datetime.now().date(), mat_d, -cant_d, f"Salida a {op_d}"]], 
+                                          columns=st.session_state.db_materiales_bodega.columns)
+                st.session_state.db_materiales_bodega = pd.concat([st.session_state.db_materiales_bodega, nueva_rest], ignore_index=True)
                 st.success("Entrega registrada")
                 st.rerun()
 
 # --- TAB: HERRAMIENTAS ---
 with tab_herr:
-    st.subheader("Control de Herramientas y Equipos")
-    h_col1, h_col2 = st.columns(2)
+    st.subheader("Asignación de Herramientas")
+    with st.form("f_herr"):
+        op_h = st.selectbox("Operario", st.session_state.cat_operarios)
+        her_h = st.selectbox("Herramienta", st.session_state.cat_herramientas)
+        can_h = st.number_input("Cantidad", min_value=1, value=1)
+        ser_h = st.text_input("Número de Serie")
+        if st.form_submit_button("🛠️ Asignar Herramienta"):
+            st.session_state.db_herramientas_operarios = pd.concat([st.session_state.db_herramientas_operarios, 
+                pd.DataFrame([[datetime.now().date(), op_h, her_h, can_h, ser_h]], columns=st.session_state.db_herramientas_operarios.columns)], ignore_index=True)
+            st.success("Asignada")
+            st.rerun()
     
-    with h_col1:
-        st.write("**Asignar Herramienta a Operario**")
-        with st.form("form_herr"):
-            op_h = st.selectbox("Operario", st.session_state.cat_operarios)
-            herr_h = st.selectbox("Herramienta", st.session_state.cat_herramientas)
-            cant_h = st.number_input("Cantidad", min_value=1, value=1)
-            ser_h = st.text_input("Serie/Placa Herramienta")
-            if st.form_submit_button("🛠️ Asignar Herramienta"):
-                nueva_h = pd.DataFrame([[datetime.now().date(), op_h, herr_h, cant_h, ser_h]], 
-                                      columns=st.session_state.db_herramientas_operarios.columns)
-                st.session_state.db_herramientas_operarios = pd.concat([st.session_state.db_herramientas_operarios, nueva_h], ignore_index=True)
-                st.success("Herramienta asignada")
-                st.rerun()
-
-    with h_col2:
-        st.write("**Resumen de Herramientas por Operario**")
-        resumen_herr = obtener_stock_operarios("HERRAMIENTA")
-        if not resumen_herr.empty:
-            st.dataframe(resumen_herr, use_container_width=True, hide_index=True)
-            st.download_button("📥 Descargar CSV Herramientas", convertir_a_csv(resumen_herr), "herramientas_operarios.csv")
+    st.dataframe(st.session_state.db_herramientas_operarios, use_container_width=True)
