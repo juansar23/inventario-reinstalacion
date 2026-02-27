@@ -1,279 +1,222 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
-import pytz
-import os
+import io
+import plotly.express as px
 
-# =====================================================
-# CONFIGURACION
-# =====================================================
+st.set_page_config(page_title="Dashboard Ejecutivo UT", layout="wide")
 
-st.set_page_config(page_title="Sistema Inventario Reinstalacion", layout="wide")
+st.title("📊 Dashboard Ejecutivo - Seguimiento Unidad de Trabajo")
 
-ARCHIVO_INVENTARIO = "inventario.csv"
-ARCHIVO_MOVIMIENTOS = "movimientos.csv"
+archivo = st.file_uploader("Sube el archivo Excel", type=["xlsx"])
 
-ZONA = pytz.timezone("America/Bogota")
+if archivo:
 
-inventario_cols = [
-    "ID", "Nombre", "Categoria", "Cantidad",
-    "Precio_Unitario", "Valor_Total",
-    "Ubicacion", "Estado", "Fecha_Ingreso", "Proveedor"
-]
+    df = pd.read_excel(archivo)
+    df.columns = df.columns.str.strip()
 
-movimientos_cols = [
-    "Fecha", "Tipo", "Material", "Cantidad", "Responsable"
-]
+    # ==================================================
+    # DETECTAR SUBCATEGORIA
+    # ==================================================
+    columnas_normalizadas = {col.lower(): col for col in df.columns}
 
-# =====================================================
-# FUNCIONES
-# =====================================================
-
-def cargar_csv(nombre, columnas):
-    if os.path.exists(nombre):
-        df = pd.read_csv(nombre)
+    if "subcategoría" in columnas_normalizadas:
+        col_sub = columnas_normalizadas["subcategoría"]
+    elif "subcategoria" in columnas_normalizadas:
+        col_sub = columnas_normalizadas["subcategoria"]
     else:
-        df = pd.DataFrame(columns=columnas)
+        st.error("No existe columna Subcategoría")
+        st.stop()
 
-    for col in columnas:
+    columnas_obligatorias = ["RANGO_EDAD", "TECNICOS INTEGRALES", "DEUDA TOTAL"]
+    for col in columnas_obligatorias:
         if col not in df.columns:
-            df[col] = ""
+            st.error(f"No existe columna {col}")
+            st.stop()
 
-    return df
+    # ==================================================
+    # SIDEBAR FILTROS
+    # ==================================================
+    st.sidebar.header("🎯 Filtros")
 
+    rangos = sorted(df["RANGO_EDAD"].dropna().astype(str).unique())
+    subcategorias = sorted(df[col_sub].dropna().astype(str).unique())
+    tecnicos = sorted(df["TECNICOS INTEGRALES"].dropna().astype(str).unique())
 
-def guardar_csv(df, nombre):
-    df.to_csv(nombre, index=False)
+    rangos_sel = st.sidebar.multiselect("Rango Edad", rangos, default=rangos)
+    sub_sel = st.sidebar.multiselect("Subcategoría", subcategorias, default=subcategorias)
 
-
-# =====================================================
-# CARGA INICIAL
-# =====================================================
-
-if "inventario" not in st.session_state:
-    st.session_state.inventario = cargar_csv(ARCHIVO_INVENTARIO, inventario_cols)
-
-if "movimientos" not in st.session_state:
-    st.session_state.movimientos = cargar_csv(ARCHIVO_MOVIMIENTOS, movimientos_cols)
-
-# =====================================================
-# TITULO
-# =====================================================
-
-st.title("Sistema de Inventario Reinstalacion")
-
-# =====================================================
-# AGREGAR MATERIAL
-# =====================================================
-
-st.subheader("Agregar Material")
-
-with st.form("form_agregar"):
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        nombre = st.text_input("Nombre del material")
-        categoria = st.selectbox("Categoria",
-                                 ["Cableado", "Equipos", "Herramientas", "Conectores", "Otros"])
-        cantidad = st.number_input("Cantidad", min_value=1, step=1)
-        precio = st.number_input("Precio unitario", min_value=0.0, step=0.01)
-
-    with col2:
-        ubicacion = st.text_input("Ubicacion")
-        estado = st.selectbox("Estado", ["Nuevo", "Usado", "Danado"])
-        proveedor = st.text_input("Proveedor")
-
-    submitted = st.form_submit_button("Registrar Entrada")
-
-    if submitted:
-
-        if nombre.strip() == "":
-            st.warning("Debe ingresar un nombre")
-        else:
-
-            fecha_actual = datetime.now(ZONA).strftime("%Y-%m-%d %H:%M")
-
-            existe = st.session_state.inventario[
-                st.session_state.inventario["Nombre"].str.lower() == nombre.lower()
-            ]
-
-            if not existe.empty:
-                idx = existe.index[0]
-                st.session_state.inventario.loc[idx, "Cantidad"] += cantidad
-                st.session_state.inventario.loc[idx, "Precio_Unitario"] = precio
-            else:
-                nuevo_id = 1
-                if not st.session_state.inventario.empty:
-                    nuevo_id = int(st.session_state.inventario["ID"].max()) + 1
-
-                nuevo = {
-                    "ID": nuevo_id,
-                    "Nombre": nombre,
-                    "Categoria": categoria,
-                    "Cantidad": cantidad,
-                    "Precio_Unitario": precio,
-                    "Valor_Total": 0,
-                    "Ubicacion": ubicacion,
-                    "Estado": estado,
-                    "Fecha_Ingreso": fecha_actual,
-                    "Proveedor": proveedor
-                }
-
-                st.session_state.inventario = pd.concat(
-                    [st.session_state.inventario, pd.DataFrame([nuevo])],
-                    ignore_index=True
-                )
-
-            # Recalcular valor total
-            st.session_state.inventario["Valor_Total"] = (
-                st.session_state.inventario["Cantidad"].astype(float) *
-                st.session_state.inventario["Precio_Unitario"].astype(float)
-            )
-
-            movimiento = {
-                "Fecha": fecha_actual,
-                "Tipo": "Entrada",
-                "Material": nombre,
-                "Cantidad": cantidad,
-                "Responsable": proveedor
-            }
-
-            st.session_state.movimientos = pd.concat(
-                [st.session_state.movimientos, pd.DataFrame([movimiento])],
-                ignore_index=True
-            )
-
-            guardar_csv(st.session_state.inventario, ARCHIVO_INVENTARIO)
-            guardar_csv(st.session_state.movimientos, ARCHIVO_MOVIMIENTOS)
-
-            st.success("Entrada registrada correctamente")
-
-# =====================================================
-# REGISTRAR SALIDA
-# =====================================================
-
-st.subheader("Registrar Salida")
-
-if not st.session_state.inventario.empty:
-
-    material = st.selectbox(
-        "Seleccionar material",
-        st.session_state.inventario["Nombre"]
+    deuda_minima = st.sidebar.number_input(
+        "Deudas mayores a:",
+        min_value=0,
+        value=100000,
+        step=50000
     )
 
-    cantidad_salida = st.number_input("Cantidad a retirar", min_value=1, step=1)
-    responsable = st.text_input("A quien se entrego")
+    # ==================================================
+    # FILTRO INTELIGENTE TECNICOS
+    # ==================================================
+    st.sidebar.subheader("👥 Técnicos Integrales")
 
-    if st.button("Registrar Salida"):
+    modo_exclusion = st.sidebar.checkbox("🧠 Seleccionar todos excepto...")
 
-        fila = st.session_state.inventario[
-            st.session_state.inventario["Nombre"] == material
+    if modo_exclusion:
+        tecnicos_excluir = st.sidebar.multiselect("🚫 Técnicos a excluir", tecnicos)
+        tecnicos_final = [t for t in tecnicos if t not in tecnicos_excluir]
+    else:
+        tecnicos_final = st.sidebar.multiselect(
+            "✅ Técnicos a incluir",
+            tecnicos,
+            default=tecnicos
+        )
+
+    st.sidebar.markdown("---")
+    st.sidebar.markdown(f"📊 **Técnicos activos:** {len(tecnicos_final)}")
+
+    if st.sidebar.button("⚡ Limpiar filtros"):
+        st.experimental_rerun()
+
+    # ==================================================
+    # LIMPIAR DEUDA
+    # ==================================================
+    df["_deuda_num"] = (
+        df["DEUDA TOTAL"]
+        .astype(str)
+        .str.replace("$", "", regex=False)
+        .str.replace(",", "", regex=False)
+        .str.replace(".", "", regex=False)
+    )
+
+    df["_deuda_num"] = pd.to_numeric(df["_deuda_num"], errors="coerce").fillna(0)
+
+    # ==================================================
+    # FILTRAR
+    # ==================================================
+    df_filtrado = df[
+        (df["RANGO_EDAD"].astype(str).isin(rangos_sel)) &
+        (df[col_sub].astype(str).isin(sub_sel)) &
+        (df["_deuda_num"] >= deuda_minima) &
+        (df["TECNICOS INTEGRALES"].astype(str).isin(tecnicos_final))
+    ].copy()
+
+    df_filtrado = df_filtrado.sort_values(by="_deuda_num", ascending=False)
+
+    # LIMITE 50 POLIZAS POR TECNICO
+    df_filtrado = (
+        df_filtrado
+        .groupby("TECNICOS INTEGRALES")
+        .head(50)
+        .reset_index(drop=True)
+    )
+
+    # ==================================================
+    # TABS
+    # ==================================================
+    tab1, tab2 = st.tabs(["📋 Tabla", "📊 Dashboard Ejecutivo"])
+
+    # ==================================================
+    # TABLA
+    # ==================================================
+    with tab1:
+
+        st.subheader("Resultado Final")
+        st.success(f"Total pólizas: {len(df_filtrado)}")
+
+        st.dataframe(df_filtrado, use_container_width=True)
+
+        if not df_filtrado.empty:
+            output = io.BytesIO()
+            df_export = df_filtrado.drop(columns=["_deuda_num"], errors="ignore")
+            df_export.to_excel(output, index=False, engine="openpyxl")
+            output.seek(0)
+
+            st.download_button(
+                "📥 Descargar archivo",
+                data=output,
+                file_name="resultado_filtrado.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+
+    # ==================================================
+    # DASHBOARD
+    # ==================================================
+    with tab2:
+
+        st.subheader("📊 Indicadores Clave")
+
+        total_polizas = len(df_filtrado)
+        total_deuda = df_filtrado["_deuda_num"].sum()
+        tecnicos_activos = df_filtrado["TECNICOS INTEGRALES"].nunique()
+
+        col1, col2, col3 = st.columns(3)
+
+        col1.metric("Total Pólizas", total_polizas)
+        col2.metric("Total Deuda", f"${total_deuda:,.0f}")
+        col3.metric("Técnicos Activos", tecnicos_activos)
+
+        st.divider()
+
+        # ==================================================
+        # TOP 10 EN TABLA
+        # ==================================================
+        st.subheader("🏆 Top 10 Técnicos con Mayor Deuda")
+
+        top10 = (
+            df_filtrado
+            .groupby("TECNICOS INTEGRALES")["_deuda_num"]
+            .sum()
+            .sort_values(ascending=False)
+            .head(10)
+            .reset_index()
+        )
+
+        top10.columns = ["Técnico Integral", "Total Deuda"]
+        top10["Total Deuda"] = top10["Total Deuda"].apply(lambda x: f"${x:,.0f}")
+
+        st.dataframe(top10, use_container_width=True)
+
+        # ==================================================
+        # SUBCATEGORIA
+        # ==================================================
+        st.subheader("🥧 Distribución por Subcategoría")
+
+        conteo_sub = df_filtrado[col_sub].value_counts().reset_index()
+        conteo_sub.columns = ["Subcategoría", "Cantidad"]
+
+        fig_pie = px.pie(conteo_sub, names="Subcategoría", values="Cantidad")
+        st.plotly_chart(fig_pie, use_container_width=True)
+
+        # ==================================================
+        # RANGO EDAD ORDEN PERSONALIZADO
+        # ==================================================
+        st.subheader("📊 Pólizas por Rango de Edad")
+
+        orden_personalizado = [
+            "0-30",
+            "31-60",
+            "61-90",
+            "91-120",
+            "121-360",
+            "361-1080",
+            ">1080"
         ]
 
-        idx = fila.index[0]
-        stock_actual = st.session_state.inventario.loc[idx, "Cantidad"]
+        conteo_edad = (
+            df_filtrado["RANGO_EDAD"]
+            .value_counts()
+            .reindex(orden_personalizado, fill_value=0)
+            .reset_index()
+        )
 
-        if cantidad_salida > stock_actual:
-            st.error("No hay suficiente stock disponible")
-        else:
+        conteo_edad.columns = ["Rango Edad", "Cantidad"]
 
-            st.session_state.inventario.loc[idx, "Cantidad"] -= cantidad_salida
+        fig_edad = px.bar(
+            conteo_edad,
+            x="Rango Edad",
+            y="Cantidad",
+            text_auto=True
+        )
 
-            # Recalcular valor total
-            st.session_state.inventario["Valor_Total"] = (
-                st.session_state.inventario["Cantidad"].astype(float) *
-                st.session_state.inventario["Precio_Unitario"].astype(float)
-            )
+        st.plotly_chart(fig_edad, use_container_width=True)
 
-            fecha_actual = datetime.now(ZONA).strftime("%Y-%m-%d %H:%M")
-
-            movimiento = {
-                "Fecha": fecha_actual,
-                "Tipo": "Salida",
-                "Material": material,
-                "Cantidad": cantidad_salida,
-                "Responsable": responsable
-            }
-
-            st.session_state.movimientos = pd.concat(
-                [st.session_state.movimientos, pd.DataFrame([movimiento])],
-                ignore_index=True
-            )
-
-            guardar_csv(st.session_state.inventario, ARCHIVO_INVENTARIO)
-            guardar_csv(st.session_state.movimientos, ARCHIVO_MOVIMIENTOS)
-
-            st.success("Salida registrada correctamente")
-
-# =====================================================
-# INVENTARIO ACTUAL
-# =====================================================
-
-st.subheader("Inventario Actual")
-
-st.dataframe(st.session_state.inventario, use_container_width=True)
-
-valor_total_general = st.session_state.inventario["Valor_Total"].astype(float).sum()
-
-st.markdown(f"### Valor Total del Inventario: ${valor_total_general:,.2f}")
-
-# =====================================================
-# HISTORIAL
-# =====================================================
-
-st.subheader("Historial de Movimientos")
-st.dataframe(st.session_state.movimientos, use_container_width=True)
-
-# =====================================================
-# EXPORTAR DATOS
-# =====================================================
-
-st.subheader("Exportar Datos")
-
-col1, col2 = st.columns(2)
-
-with col1:
-    csv_inv = st.session_state.inventario.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        "Descargar Inventario Actual",
-        data=csv_inv,
-        file_name="inventario_actual.csv",
-        mime="text/csv"
-    )
-
-with col2:
-    salidas = st.session_state.movimientos[
-        st.session_state.movimientos["Tipo"] == "Salida"
-    ]
-
-    csv_sal = salidas.to_csv(index=False).encode("utf-8")
-
-    st.download_button(
-        "Descargar Historial de Salidas",
-        data=csv_sal,
-        file_name="historial_salidas.csv",
-        mime="text/csv"
-    )
-
-# =====================================================
-# RESET INVENTARIO
-# =====================================================
-
-st.subheader("Reset Mensual")
-
-confirmar = st.checkbox("Confirmo reiniciar todo el inventario")
-
-if confirmar:
-    if st.button("Resetear Inventario"):
-
-        st.session_state.inventario = pd.DataFrame(columns=inventario_cols)
-        st.session_state.movimientos = pd.DataFrame(columns=movimientos_cols)
-
-        if os.path.exists(ARCHIVO_INVENTARIO):
-            os.remove(ARCHIVO_INVENTARIO)
-
-        if os.path.exists(ARCHIVO_MOVIMIENTOS):
-            os.remove(ARCHIVO_MOVIMIENTOS)
-
-        st.success("Inventario reiniciado correctamente")
+else:
+    st.info("👆 Sube un archivo para comenzar.")
