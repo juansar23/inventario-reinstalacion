@@ -1,279 +1,137 @@
 import streamlit as st
 import pandas as pd
+import io
 from datetime import datetime
-import pytz
-import os
 
-# =====================================================
-# CONFIGURACION
-# =====================================================
+st.set_page_config(page_title="Control de Inventario Online", layout="wide")
 
-st.set_page_config(page_title="Sistema Inventario Reinstalacion", layout="wide")
+# ==================================================
+# 1. BASE DE DATOS VIRTUAL (Session State)
+# ==================================================
+# Inicializamos las tablas si no existen en la sesión
+if 'db_entradas' not in st.session_state:
+    st.session_state.db_entradas = pd.DataFrame(columns=["Fecha", "Material", "Cantidad", "Proveedor"])
 
-ARCHIVO_INVENTARIO = "inventario.csv"
-ARCHIVO_MOVIMIENTOS = "movimientos.csv"
+if 'db_salidas' not in st.session_state:
+    st.session_state.db_salidas = pd.DataFrame(columns=["Fecha", "Material", "Cantidad", "Entregado A", "Responsable"])
 
-ZONA = pytz.timezone("America/Bogota")
+# Lista de materiales predefinidos (puedes editarlos aquí)
+if 'lista_materiales' not in st.session_state:
+    st.session_state.lista_materiales = ["Cable UTP", "Módem", "Router", "Conectores RJ45", "Splitter"]
 
-inventario_cols = [
-    "ID", "Nombre", "Categoria", "Cantidad",
-    "Precio_Unitario", "Valor_Total",
-    "Ubicacion", "Estado", "Fecha_Ingreso", "Proveedor"
-]
+# ==================================================
+# 2. LÓGICA DE CÁLCULO DE STOCK
+# ==================================================
+def obtener_stock_actual():
+    # Sumar todas las entradas por material
+    entradas = st.session_state.db_entradas.groupby("Material")["Cantidad"].sum().reset_index()
+    # Sumar todas las salidas por material
+    salidas = st.session_state.db_salidas.groupby("Material")["Cantidad"].sum().reset_index()
+    
+    # Crear tabla de inventario
+    df_inventario = pd.DataFrame({"Material": st.session_state.lista_materiales})
+    df_inventario = pd.merge(df_inventario, entradas, on="Material", how="left").fillna(0)
+    df_inventario.rename(columns={"Cantidad": "Total Entradas"}, inplace=True)
+    
+    df_inventario = pd.merge(df_inventario, salidas, on="Material", how="left").fillna(0)
+    df_inventario.rename(columns={"Cantidad": "Total Salidas"}, inplace=True)
+    
+    df_inventario["Stock Disponible"] = df_inventario["Total Entradas"] - df_inventario["Total Salidas"]
+    return df_inventario
 
-movimientos_cols = [
-    "Fecha", "Tipo", "Material", "Cantidad", "Responsable"
-]
+# ==================================================
+# 3. INTERFAZ DE USUARIO (TABS)
+# ==================================================
+st.title("📦 Sistema de Inventario en Línea")
 
-# =====================================================
-# FUNCIONES
-# =====================================================
+tab_stock, tab_entrada, tab_salida, tab_admin = st.tabs([
+    "📊 Stock Actual", 
+    "📥 Registrar Entrada", 
+    "📤 Registrar Salida",
+    "⚙️ Configuración"
+])
 
-def cargar_csv(nombre, columnas):
-    if os.path.exists(nombre):
-        df = pd.read_csv(nombre)
-    else:
-        df = pd.DataFrame(columns=columnas)
+# --- TAB: STOCK ACTUAL ---
+with tab_stock:
+    st.subheader("Estado del Inventario")
+    df_stock = obtener_stock_actual()
+    
+    # Métricas clave
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Items en Catálogo", len(st.session_state.lista_materiales))
+    c2.metric("Total Unidades Stock", int(df_stock["Stock Disponible"].sum()))
+    c3.metric("Último Movimiento", datetime.now().strftime("%H:%M:%S"))
+    
+    st.dataframe(df_stock, use_container_width=True)
 
-    for col in columnas:
-        if col not in df.columns:
-            df[col] = ""
+# --- TAB: REGISTRAR ENTRADA (Carga de inventario) ---
+with tab_entrada:
+    st.subheader("Añadir Stock al Sistema")
+    with st.form("form_entrada", clear_on_submit=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            m_entrada = st.selectbox("Material que ingresa", st.session_state.lista_materiales)
+            c_entrada = st.number_input("Cantidad", min_value=1, step=1)
+        with col2:
+            prov = st.text_input("Proveedor / Origen", value="Bodega Central")
+            f_entrada = st.date_input("Fecha de Ingreso", datetime.now())
+        
+        btn_ent = st.form_submit_button("📥 Registrar Ingreso")
+        
+        if btn_ent:
+            nueva_ent = pd.DataFrame([[f_entrada, m_entrada, c_entrada, prov]], 
+                                     columns=["Fecha", "Material", "Cantidad", "Proveedor"])
+            st.session_state.db_entradas = pd.concat([st.session_state.db_entradas, nueva_ent], ignore_index=True)
+            st.success(f"Se cargaron {c_entrada} unidades de {m_entrada}")
+            st.rerun()
 
-    return df
-
-
-def guardar_csv(df, nombre):
-    df.to_csv(nombre, index=False)
-
-
-# =====================================================
-# CARGA INICIAL
-# =====================================================
-
-if "inventario" not in st.session_state:
-    st.session_state.inventario = cargar_csv(ARCHIVO_INVENTARIO, inventario_cols)
-
-if "movimientos" not in st.session_state:
-    st.session_state.movimientos = cargar_csv(ARCHIVO_MOVIMIENTOS, movimientos_cols)
-
-# =====================================================
-# TITULO
-# =====================================================
-
-st.title("Sistema de Inventario Reinstalacion")
-
-# =====================================================
-# AGREGAR MATERIAL
-# =====================================================
-
-st.subheader("Agregar Material")
-
-with st.form("form_agregar"):
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        nombre = st.text_input("Nombre del material")
-        categoria = st.selectbox("Categoria",
-                                 ["Cableado", "Equipos", "Herramientas", "Conectores", "Otros"])
-        cantidad = st.number_input("Cantidad", min_value=1, step=1)
-        precio = st.number_input("Precio unitario", min_value=0.0, step=0.01)
-
-    with col2:
-        ubicacion = st.text_input("Ubicacion")
-        estado = st.selectbox("Estado", ["Nuevo", "Usado", "Danado"])
-        proveedor = st.text_input("Proveedor")
-
-    submitted = st.form_submit_button("Registrar Entrada")
-
-    if submitted:
-
-        if nombre.strip() == "":
-            st.warning("Debe ingresar un nombre")
-        else:
-
-            fecha_actual = datetime.now(ZONA).strftime("%Y-%m-%d %H:%M")
-
-            existe = st.session_state.inventario[
-                st.session_state.inventario["Nombre"].str.lower() == nombre.lower()
-            ]
-
-            if not existe.empty:
-                idx = existe.index[0]
-                st.session_state.inventario.loc[idx, "Cantidad"] += cantidad
-                st.session_state.inventario.loc[idx, "Precio_Unitario"] = precio
+# --- TAB: REGISTRAR SALIDA (Entrega a técnicos) ---
+with tab_salida:
+    st.subheader("Entrega de Material")
+    df_stock_validar = obtener_stock_actual()
+    
+    with st.form("form_salida", clear_on_submit=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            m_salida = st.selectbox("Material a entregar", st.session_state.lista_materiales)
+            
+            # Validar stock disponible
+            disp = df_stock_validar.loc[df_stock_validar["Material"] == m_salida, "Stock Disponible"].values[0]
+            st.info(f"Disponible actualmente: {int(disp)} unidades")
+            
+            c_salida = st.number_input("Cantidad a entregar", min_value=1, step=1)
+        
+        with col2:
+            receptor = st.text_input("Nombre de quien recibe (Técnico/Cliente)")
+            responsable = st.text_input("Persona que entrega")
+            f_salida = st.date_input("Fecha de Salida", datetime.now())
+        
+        btn_sal = st.form_submit_button("📤 Confirmar Entrega")
+        
+        if btn_sal:
+            if c_salida > disp:
+                st.error(f"❌ Error: Stock insuficiente. Solo hay {int(disp)} disponibles.")
+            elif not receptor:
+                st.warning("⚠️ Debes indicar quién recibe el material.")
             else:
-                nuevo_id = 1
-                if not st.session_state.inventario.empty:
-                    nuevo_id = int(st.session_state.inventario["ID"].max()) + 1
+                nueva_sal = pd.DataFrame([[f_salida, m_salida, c_salida, receptor, responsable]], 
+                                         columns=["Fecha", "Material", "Cantidad", "Entregado A", "Responsable"])
+                st.session_state.db_salidas = pd.concat([st.session_state.db_salidas, nueva_sal], ignore_index=True)
+                st.success(f"Salida registrada: {c_salida} {m_salida} entregados a {receptor}")
+                st.rerun()
 
-                nuevo = {
-                    "ID": nuevo_id,
-                    "Nombre": nombre,
-                    "Categoria": categoria,
-                    "Cantidad": cantidad,
-                    "Precio_Unitario": precio,
-                    "Valor_Total": 0,
-                    "Ubicacion": ubicacion,
-                    "Estado": estado,
-                    "Fecha_Ingreso": fecha_actual,
-                    "Proveedor": proveedor
-                }
-
-                st.session_state.inventario = pd.concat(
-                    [st.session_state.inventario, pd.DataFrame([nuevo])],
-                    ignore_index=True
-                )
-
-            # Recalcular valor total
-            st.session_state.inventario["Valor_Total"] = (
-                st.session_state.inventario["Cantidad"].astype(float) *
-                st.session_state.inventario["Precio_Unitario"].astype(float)
-            )
-
-            movimiento = {
-                "Fecha": fecha_actual,
-                "Tipo": "Entrada",
-                "Material": nombre,
-                "Cantidad": cantidad,
-                "Responsable": proveedor
-            }
-
-            st.session_state.movimientos = pd.concat(
-                [st.session_state.movimientos, pd.DataFrame([movimiento])],
-                ignore_index=True
-            )
-
-            guardar_csv(st.session_state.inventario, ARCHIVO_INVENTARIO)
-            guardar_csv(st.session_state.movimientos, ARCHIVO_MOVIMIENTOS)
-
-            st.success("Entrada registrada correctamente")
-
-# =====================================================
-# REGISTRAR SALIDA
-# =====================================================
-
-st.subheader("Registrar Salida")
-
-if not st.session_state.inventario.empty:
-
-    material = st.selectbox(
-        "Seleccionar material",
-        st.session_state.inventario["Nombre"]
-    )
-
-    cantidad_salida = st.number_input("Cantidad a retirar", min_value=1, step=1)
-    responsable = st.text_input("A quien se entrego")
-
-    if st.button("Registrar Salida"):
-
-        fila = st.session_state.inventario[
-            st.session_state.inventario["Nombre"] == material
-        ]
-
-        idx = fila.index[0]
-        stock_actual = st.session_state.inventario.loc[idx, "Cantidad"]
-
-        if cantidad_salida > stock_actual:
-            st.error("No hay suficiente stock disponible")
-        else:
-
-            st.session_state.inventario.loc[idx, "Cantidad"] -= cantidad_salida
-
-            # Recalcular valor total
-            st.session_state.inventario["Valor_Total"] = (
-                st.session_state.inventario["Cantidad"].astype(float) *
-                st.session_state.inventario["Precio_Unitario"].astype(float)
-            )
-
-            fecha_actual = datetime.now(ZONA).strftime("%Y-%m-%d %H:%M")
-
-            movimiento = {
-                "Fecha": fecha_actual,
-                "Tipo": "Salida",
-                "Material": material,
-                "Cantidad": cantidad_salida,
-                "Responsable": responsable
-            }
-
-            st.session_state.movimientos = pd.concat(
-                [st.session_state.movimientos, pd.DataFrame([movimiento])],
-                ignore_index=True
-            )
-
-            guardar_csv(st.session_state.inventario, ARCHIVO_INVENTARIO)
-            guardar_csv(st.session_state.movimientos, ARCHIVO_MOVIMIENTOS)
-
-            st.success("Salida registrada correctamente")
-
-# =====================================================
-# INVENTARIO ACTUAL
-# =====================================================
-
-st.subheader("Inventario Actual")
-
-st.dataframe(st.session_state.inventario, use_container_width=True)
-
-valor_total_general = st.session_state.inventario["Valor_Total"].astype(float).sum()
-
-st.markdown(f"### Valor Total del Inventario: ${valor_total_general:,.2f}")
-
-# =====================================================
-# HISTORIAL
-# =====================================================
-
-st.subheader("Historial de Movimientos")
-st.dataframe(st.session_state.movimientos, use_container_width=True)
-
-# =====================================================
-# EXPORTAR DATOS
-# =====================================================
-
-st.subheader("Exportar Datos")
-
-col1, col2 = st.columns(2)
-
-with col1:
-    csv_inv = st.session_state.inventario.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        "Descargar Inventario Actual",
-        data=csv_inv,
-        file_name="inventario_actual.csv",
-        mime="text/csv"
-    )
-
-with col2:
-    salidas = st.session_state.movimientos[
-        st.session_state.movimientos["Tipo"] == "Salida"
-    ]
-
-    csv_sal = salidas.to_csv(index=False).encode("utf-8")
-
-    st.download_button(
-        "Descargar Historial de Salidas",
-        data=csv_sal,
-        file_name="historial_salidas.csv",
-        mime="text/csv"
-    )
-
-# =====================================================
-# RESET INVENTARIO
-# =====================================================
-
-st.subheader("Reset Mensual")
-
-confirmar = st.checkbox("Confirmo reiniciar todo el inventario")
-
-if confirmar:
-    if st.button("Resetear Inventario"):
-
-        st.session_state.inventario = pd.DataFrame(columns=inventario_cols)
-        st.session_state.movimientos = pd.DataFrame(columns=movimientos_cols)
-
-        if os.path.exists(ARCHIVO_INVENTARIO):
-            os.remove(ARCHIVO_INVENTARIO)
-
-        if os.path.exists(ARCHIVO_MOVIMIENTOS):
-            os.remove(ARCHIVO_MOVIMIENTOS)
-
-        st.success("Inventario reiniciado correctamente")
+# --- TAB: CONFIGURACIÓN (Añadir nuevos tipos de materiales) ---
+with tab_admin:
+    st.subheader("Administrar Catálogo")
+    nuevo_item = st.text_input("Nombre del nuevo material (ej: Cinta aislante)")
+    if st.button("➕ Añadir al Catálogo"):
+        if nuevo_item and nuevo_item not in st.session_state.lista_materiales:
+            st.session_state.lista_materiales.append(nuevo_item)
+            st.success(f"'{nuevo_item}' añadido correctamente.")
+            st.rerun()
+    
+    st.divider()
+    if st.button("🗑️ Limpiar Todo el Inventario (Reset)"):
+        st.session_state.db_entradas = pd.DataFrame(columns=["Fecha", "Material", "Cantidad", "Proveedor"])
+        st.session_state.db_salidas = pd.DataFrame(columns=["Fecha", "Material", "Cantidad", "Entregado A", "Responsable"])
+        st.rerun()
