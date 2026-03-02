@@ -3,127 +3,96 @@ import pandas as pd
 import io
 from datetime import datetime
 
-# Configuración de la página
-st.set_page_config(page_title="Procesador de Inventario UT", layout="wide")
+st.set_page_config(page_title="Sistema ITA - Control Total", layout="wide")
 
 # ==================================================
-# 1. GESTIÓN DE DATOS EN MEMORIA VOLÁTIL
+# 1. CARGA INICIAL
 # ==================================================
-# Usamos session_state para mantener los cambios mientras la pestaña esté abierta
-if 'db_movs' not in st.session_state:
-    st.session_state.db_movs = pd.DataFrame(columns=["Fecha", "Tipo_Movimiento", "Operario", "Material", "Cantidad", "Referencia/Acta"])
-
-# ==================================================
-# 2. FUNCIONES DE CÁLCULO
-# ==================================================
-def obtener_stock_real(df):
-    if df.empty:
-        return pd.DataFrame(columns=["Operario", "Material", "Stock Actual"])
-    
-    temp_df = df.copy()
-    # Las ACTAS restan, el resto (INICIAL, BODEGA) suman
-    temp_df['Cantidad_Neta'] = temp_df.apply(
-        lambda x: -x['Cantidad'] if x['Tipo_Movimiento'] == "ACTA" else x['Cantidad'], axis=1
-    )
-    
-    resumen = temp_df.groupby(["Operario", "Material"])["Cantidad_Neta"].sum().reset_index()
-    resumen.rename(columns={"Cantidad_Neta": "Stock Actual"}, inplace=True)
-    return resumen
-
-def exportar_excel(df_movimientos):
-    # Crea un archivo Excel en memoria para descargar
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df_movimientos.to_excel(writer, index=False, sheet_name='Historial_Movimientos')
-        # También incluimos el resumen calculado para conveniencia
-        obtener_stock_real(df_movimientos).to_excel(writer, index=False, sheet_name='Resumen_Stock')
-    return output.getvalue()
+if 'data' not in st.session_state:
+    st.session_state.data = {
+        'MATERIALES': pd.read_csv("INVENTARIO.xlsx - MATERIALES ITA.csv"),
+        'ACCESORIOS': pd.read_csv("INVENTARIO.xlsx - ACCESORIOS ITA.csv"),
+        'TRIPLE_A': pd.read_csv("INVENTARIO.xlsx - INVENTARIO TRIPLE A.csv"),
+        'OPERARIOS': pd.DataFrame(columns=['OPERARIO', 'NOMBRE', 'CANTIDAD'])
+    }
 
 # ==================================================
-# 3. INTERFAZ PRINCIPAL
+# 2. LÓGICA DE MOVIMIENTOS
 # ==================================================
-st.title("📑 Procesador de Inventario y Actas")
-st.info("Paso 1: Sube tu archivo actual. Paso 2: Registra movimientos. Paso 3: Descarga el resultado.")
-
-# --- SECCIÓN DE CARGA ---
-with st.expander("📂 CARGAR BASE DE DATOS ACTUAL", expanded=st.session_state.db_movs.empty):
-    archivo_subido = st.file_uploader("Sube tu archivo Excel o CSV de movimientos", type=["xlsx", "csv"])
-    if archivo_subido:
-        if archivo_subido.name.endswith('.csv'):
-            df_input = pd.read_csv(archivo_subido)
-        else:
-            df_input = pd.read_excel(archivo_subido)
-        
-        if st.button("Confirmar Carga de Datos"):
-            st.session_state.db_movs = df_input
-            st.success("¡Datos cargados correctamente!")
-            st.rerun()
-
-# --- SI HAY DATOS CARGADOS, MOSTRAR HERRAMIENTAS ---
-if not st.session_state.db_movs.empty:
-    tab_resumen, tab_registro, tab_descarga = st.tabs(["📊 Stock Actual", "📝 Registrar Salida (Acta)", "💾 Descargar Cambios"])
-
-    with tab_resumen:
-        st.subheader("Estado de Inventario en Calle")
-        df_actual = obtener_stock_real(st.session_state.db_movs)
-        st.dataframe(df_actual, use_container_width=True, hide_index=True)
-
-    with tab_registro:
-        st.subheader("Registrar Nueva Acta de Consumo")
-        df_val = obtener_stock_real(st.session_state.db_movs)
-        
-        with st.form("form_salida", clear_on_submit=True):
-            col1, col2 = st.columns(2)
-            # Extraemos operarios y materiales de los datos subidos
-            ops_disponibles = sorted(st.session_state.db_movs["Operario"].unique())
-            op_sel = col1.selectbox("Operario", ops_disponibles)
-            
-            mats_op = df_val[df_val["Operario"] == op_sel]["Material"].unique()
-            mat_sel = col1.selectbox("Material a reportar", mats_op if len(mats_op)>0 else ["Sin stock"])
-            
-            # Mostrar stock disponible en tiempo real
-            if len(mats_op) > 0:
-                actual = df_val[(df_val["Operario"] == op_sel) & (df_val["Material"] == mat_sel)]["Stock Actual"].values[0]
-                col1.warning(f"Stock disponible: {int(actual)}")
-            
-            cant_salida = col2.number_input("Cantidad utilizada", min_value=1, step=1)
-            n_acta = col2.text_input("Número de Acta / Orden de Trabajo")
-            
-            if st.form_submit_button("Añadir Movimiento"):
-                if len(mats_op) == 0:
-                    st.error("Este operario no tiene material.")
-                elif cant_salida > actual:
-                    st.error("No puedes restar más de lo que el operario tiene.")
+def transferir_a_operario(nombre_material, cant, operario_destino):
+    for tabla in ['MATERIALES', 'ACCESORIOS', 'TRIPLE_A']:
+        df = st.session_state.data[tabla]
+        if nombre_material in df['NOMBRE'].values:
+            idx = df[df['NOMBRE'] == nombre_material].index[0]
+            if df.loc[idx, 'CANTIDAD'] >= cant:
+                st.session_state.data[tabla].loc[idx, 'CANTIDAD'] -= cant
+                
+                df_op = st.session_state.data['OPERARIOS']
+                mask = (df_op['OPERARIO'] == operario_destino) & (df_op['NOMBRE'] == nombre_material)
+                if mask.any():
+                    st.session_state.data['OPERARIOS'].loc[mask, 'CANTIDAD'] += cant
                 else:
-                    # Crear nueva fila de movimiento
-                    nueva_fila = pd.DataFrame([{
-                        "Fecha": datetime.now().strftime("%Y-%m-%d"),
-                        "Tipo_Movimiento": "ACTA",
-                        "Operario": op_sel,
-                        "Material": mat_sel,
-                        "Cantidad": cant_salida,
-                        "Referencia/Acta": n_acta
-                    }])
-                    st.session_state.db_movs = pd.concat([st.session_state.db_movs, nueva_fila], ignore_index=True)
-                    st.success("Movimiento añadido a la lista temporal.")
-                    st.rerun()
+                    nueva = pd.DataFrame([{'OPERARIO': operario_destino, 'NOMBRE': nombre_material, 'CANTIDAD': cant}])
+                    st.session_state.data['OPERARIOS'] = pd.concat([df_op, nueva], ignore_index=True)
+                st.success(f"✅ Entregado: {cant} {nombre_material} a {operario_destino}")
+                return
+            else:
+                st.error("Stock insuficiente en bodega.")
+                return
 
-    with tab_descarga:
-        st.subheader("Finalizar y Guardar")
-        st.write("Haz clic abajo para generar el nuevo archivo Excel con todos los movimientos agregados.")
-        
-        excel_data = exportar_excel(st.session_state.db_movs)
-        nombre_archivo = f"Inventario_Actualizado_{datetime.now().strftime('%d_%m_%Y')}.xlsx"
-        
-        st.download_button(
-            label="📥 Descargar Excel Actualizado",
-            data=excel_data,
-            file_name=nombre_archivo,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-        
-        if st.button("🚨 Limpiar sesión (Borrar todo para empezar de cero)"):
-            st.session_state.clear()
+# ==================================================
+# 3. INTERFAZ
+# ==================================================
+st.title("🛡️ Panel de Control ITA")
+t1, t2, t3, t4, t5 = st.tabs(["🚚 Entregas (Bodega->Op)", "📄 Actas (Consumo)", "👷 Stock Operarios", "📦 Bodegas", "💾 Exportar"])
+
+# --- ENTREGAS ---
+with t1:
+    st.subheader("Entregar de Bodega a Operario")
+    with st.form("f_entrega"):
+        op_nom = st.text_input("Nombre del Operario").upper()
+        lista_bodega = pd.concat([st.session_state.data[t]['NOMBRE'] for t in ['MATERIALES', 'ACCESORIOS', 'TRIPLE_A']]).unique()
+        mat_sel = st.selectbox("Material", lista_bodega)
+        cant = st.number_input("Cantidad a entregar", min_value=1)
+        if st.form_submit_button("Ejecutar Entrega"):
+            transferir_a_operario(mat_sel, cant, op_nom)
             st.rerun()
-else:
-    st.warning("⚠️ Por favor, sube un archivo Excel para comenzar a trabajar.")
+
+# --- ACTAS (CONSUMO) ---
+with t2:
+    st.subheader("Registrar Acta (Consumo de Operario)")
+    with st.form("f_acta"):
+        df_op = st.session_state.data['OPERARIOS']
+        op_sel = st.selectbox("Operario", df_op['OPERARIO'].unique())
+        mats_op = df_op[df_op['OPERARIO'] == op_sel]['NOMBRE'].unique()
+        mat_acta = st.selectbox("Material instalado", mats_op)
+        cant_acta = st.number_input("Cantidad utilizada", min_value=1)
+        
+        if st.form_submit_button("Registrar Acta de Consumo"):
+            mask = (df_op['OPERARIO'] == op_sel) & (df_op['NOMBRE'] == mat_acta)
+            if df_op.loc[mask, 'CANTIDAD'].values[0] >= cant_acta:
+                st.session_state.data['OPERARIOS'].loc[mask, 'CANTIDAD'] -= cant_acta
+                st.success("✅ Material descontado del inventario del operario.")
+                st.rerun()
+            else:
+                st.error("Cantidad mayor al stock del operario.")
+
+# --- STOCK OPERARIOS ---
+with t3:
+    st.dataframe(st.session_state.data['OPERARIOS'], use_container_width=True)
+
+# --- BODEGAS ---
+with t4:
+    c1, c2, c3 = st.columns(3)
+    with c1: st.write("Materiales"); st.dataframe(st.session_state.data['MATERIALES'])
+    with c2: st.write("Accesorios"); st.dataframe(st.session_state.data['ACCESORIOS'])
+    with c3: st.write("Triple A"); st.dataframe(st.session_state.data['TRIPLE_A'])
+
+# --- EXPORTAR ---
+with t5:
+    if st.button("Generar Excel Maestro"):
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            for name, df in st.session_state.data.items():
+                df.to_excel(writer, sheet_name=name, index=False)
+        st.download_button("Descargar", output.getvalue(), "Inventario_Final_ITA.xlsx")
