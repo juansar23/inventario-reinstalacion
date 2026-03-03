@@ -3,12 +3,12 @@ import pandas as pd
 import io
 from datetime import datetime
 
-st.set_page_config(page_title="Sistema ITA - Control Operarios", layout="wide")
+st.set_page_config(page_title="Sistema ITA - Trazabilidad Total", layout="wide")
 
 # ==================================================
 # 1. CARGA Y NORMALIZACIÓN DE DATOS
 # ==================================================
-st.title("🛡️ Panel de Control ITA")
+st.title("🛡️ Panel de Control ITA: Trazabilidad Total")
 
 archivo = st.sidebar.file_uploader("📂 Sube tu archivo Excel Maestro", type=["xlsx"])
 
@@ -18,40 +18,33 @@ if archivo:
             xls = pd.ExcelFile(archivo)
             st.session_state.data = {}
             
-            # 1. Cargar Bodegas (NOMBRE, CANTIDAD)
-            hojas_bodega = {
-                'MATERIALES': 'MATERIALES ITA',
-                'ACCESORIOS': 'ACCESORIOS ITA',
-                'TRIPLE_A': 'INVENTARIO TRIPLE A'
-            }
-            
+            # Cargar Bodegas
+            hojas_bodega = {'MATERIALES': 'MATERIALES ITA', 'ACCESORIOS': 'ACCESORIOS ITA', 'TRIPLE_A': 'INVENTARIO TRIPLE A'}
             for clave, nombre_hoja in hojas_bodega.items():
                 if nombre_hoja in xls.sheet_names:
                     df = pd.read_excel(archivo, sheet_name=nombre_hoja)
-                    # Aseguramos nombres de columnas para bodega
                     df.columns = ['NOMBRE', 'CANTIDAD'] + list(df.columns[2:])
                     st.session_state.data[clave] = df
-                else:
-                    st.error(f"No se encontró la pestaña: {nombre_hoja}")
-                    st.stop()
 
-            # 2. Cargar Operarios (OPERARIO, MATERIAL, CANTIDAD)
+            # Cargar Operarios
             if 'OPERARIOS' in xls.sheet_names:
                 df_op = pd.read_excel(archivo, sheet_name='OPERARIOS')
-                # Forzamos los encabezados que tú tienes
                 df_op.columns = ['OPERARIO', 'MATERIAL', 'CANTIDAD'] + list(df_op.columns[3:])
-                
-                # Limpieza: quitar espacios y convertir a mayúsculas
-                df_op['OPERARIO'] = df_op['OPERARIO'].astype(str).str.strip().str.upper()
-                df_op['MATERIAL'] = df_op['MATERIAL'].astype(str).str.strip().str.upper()
-                
-                # Consolidar: Si alguien aparece repetido con el mismo material, sumamos
                 st.session_state.data['OPERARIOS'] = df_op.groupby(['OPERARIO', 'MATERIAL'], as_index=False)['CANTIDAD'].sum()
             else:
                 st.session_state.data['OPERARIOS'] = pd.DataFrame(columns=['OPERARIO', 'MATERIAL', 'CANTIDAD'])
 
-            st.session_state.data['HISTORIAL'] = pd.DataFrame(columns=['FECHA', 'OPERARIO', 'MATERIAL', 'CANTIDAD', 'NUM_ACTA'])
-            st.success("✅ Excel cargado correctamente con encabezados: OPERARIO, MATERIAL, CANTIDAD")
+            # Historial de Entregas (BODEGA -> OPERARIO)
+            if 'HISTORIAL_ENTREGAS' in xls.sheet_names:
+                st.session_state.data['H_ENTREGAS'] = pd.read_excel(archivo, sheet_name='HISTORIAL_ENTREGAS')
+            else:
+                st.session_state.data['H_ENTREGAS'] = pd.DataFrame(columns=['FECHA', 'OPERARIO', 'MATERIAL', 'CANTIDAD'])
+
+            # Historial de Actas (OPERARIO -> OBRA)
+            if 'HISTORIAL_ACTAS' in xls.sheet_names:
+                st.session_state.data['H_ACTAS'] = pd.read_excel(archivo, sheet_name='HISTORIAL_ACTAS')
+            else:
+                st.session_state.data['H_ACTAS'] = pd.DataFrame(columns=['FECHA', 'NUM_ACTA', 'OPERARIO', 'MATERIAL', 'CANTIDAD'])
 
         except Exception as e:
             st.error(f"Error al cargar: {e}")
@@ -60,78 +53,93 @@ if archivo:
     # ==================================================
     # 2. LÓGICA DE MOVIMIENTOS
     # ==================================================
-    def mover_a_operario(nombre_mat, cant, op_destino):
+    def registrar_entrega(mat_nombre, cant, op_destino):
         for b in ['MATERIALES', 'ACCESORIOS', 'TRIPLE_A']:
             df_b = st.session_state.data[b]
-            if nombre_mat in df_b['NOMBRE'].values:
-                idx = df_b[df_b['NOMBRE'] == nombre_mat].index[0]
+            if mat_nombre in df_b['NOMBRE'].values:
+                idx = df_b[df_b['NOMBRE'] == mat_nombre].index[0]
                 if df_b.loc[idx, 'CANTIDAD'] >= cant:
-                    # Descontar de bodega
+                    # Restar de bodega
                     st.session_state.data[b].loc[idx, 'CANTIDAD'] -= cant
-                    
                     # Sumar a operario
                     df_o = st.session_state.data['OPERARIOS']
-                    mask = (df_o['OPERARIO'] == op_destino) & (df_o['MATERIAL'] == nombre_mat)
-                    
+                    mask = (df_o['OPERARIO'] == op_destino) & (df_o['MATERIAL'] == mat_nombre)
                     if mask.any():
                         st.session_state.data['OPERARIOS'].loc[mask, 'CANTIDAD'] += cant
                     else:
-                        nueva = pd.DataFrame([{'OPERARIO': op_destino, 'MATERIAL': nombre_mat, 'CANTIDAD': cant}])
+                        nueva = pd.DataFrame([{'OPERARIO': op_destino, 'MATERIAL': mat_nombre, 'CANTIDAD': cant}])
                         st.session_state.data['OPERARIOS'] = pd.concat([df_o, nueva], ignore_index=True)
+                    # Guardar en HISTORIAL DE ENTREGAS
+                    h_ent = pd.DataFrame([{'FECHA': datetime.now().strftime("%d/%m/%Y %H:%M"), 'OPERARIO': op_destino, 'MATERIAL': mat_nombre, 'CANTIDAD': cant}])
+                    st.session_state.data['H_ENTREGAS'] = pd.concat([st.session_state.data['H_ENTREGAS'], h_ent], ignore_index=True)
                     return True
         return False
 
     # ==================================================
     # 3. INTERFAZ
     # ==================================================
-    t1, t2, t3, t4 = st.tabs(["🚚 Entregas", "👷 Stock x Operario", "📦 Bodegas", "💾 Exportar"])
+    t1, t2, t3, t4, t5 = st.tabs(["🚚 Entregas (Bodega)", "📄 Actas (Instalación)", "👷 Saldos Operarios", "📜 Historiales", "💾 Exportar"])
 
     with t1:
-        st.subheader("Entrega de Material")
-        with st.form("f_entrega", clear_on_submit=True):
+        st.subheader("Salida de Bodega a Operario")
+        with st.form("f_ent", clear_on_submit=True):
             col1, col2 = st.columns(2)
-            ops_actuales = sorted(st.session_state.data['OPERARIOS']['OPERARIO'].unique())
-            op_nombre = col1.selectbox("Seleccione Operario", ["NUEVO..."] + [x for x in ops_actuales if x != 'NAN'])
-            if op_nombre == "NUEVO...":
-                op_nombre = col1.text_input("Escriba nombre del operario").upper().strip()
+            ops = sorted(st.session_state.data['OPERARIOS']['OPERARIO'].unique())
+            op_n = col1.selectbox("Operario", ["NUEVO..."] + [x for x in ops if str(x) != 'nan'])
+            if op_n == "NUEVO...": op_n = col1.text_input("Nombre Completo").upper().strip()
             
-            # Unificar materiales de todas las bodegas para el buscador
-            mats_bodega = pd.concat([st.session_state.data[b]['NOMBRE'] for b in ['MATERIALES', 'ACCESORIOS', 'TRIPLE_A']]).unique()
-            mat_sel = col2.selectbox("Seleccione Material", sorted(mats_bodega))
-            cant_sel = col2.number_input("Cantidad", min_value=1, step=1)
+            mats = pd.concat([st.session_state.data[b]['NOMBRE'] for b in ['MATERIALES', 'ACCESORIOS', 'TRIPLE_A']]).unique()
+            m_sel = col2.selectbox("Material", sorted(mats))
+            c_sel = col2.number_input("Cantidad", min_value=1, step=1)
             
-            if st.form_submit_button("Registrar Movimiento"):
-                if op_nombre and mover_a_operario(mat_sel, cant_sel, op_nombre):
-                    st.success("✅ Registrado con éxito")
+            if st.form_submit_button("Registrar Entrega"):
+                if op_n and registrar_entrega(m_sel, c_sel, op_n):
+                    st.success("✅ Entrega registrada")
                     st.rerun()
 
     with t2:
-        st.subheader("Consulta de Inventario por Operario")
-        df_view = st.session_state.data['OPERARIOS']
-        if not df_view.empty:
-            op_f = st.selectbox("Elegir Operario:", sorted(df_view['OPERARIO'].unique()))
-            # Filtro por operario y mostramos columnas exactas: MATERIAL y CANTIDAD
-            resumen = df_view[df_view['OPERARIO'] == op_f]
-            st.table(resumen[['MATERIAL', 'CANTIDAD']])
-        else:
-            st.info("No hay datos en la hoja de operarios.")
+        st.subheader("Consumo por Acta")
+        df_op = st.session_state.data['OPERARIOS']
+        if not df_op.empty:
+            with st.form("f_acta", clear_on_submit=True):
+                c1, c2 = st.columns(2)
+                op_acta = c1.selectbox("Operario responsable", sorted(df_op['OPERARIO'].unique()))
+                n_acta = c1.text_input("Número de Acta").upper().strip()
+                mat_acta = c2.selectbox("Material usado", df_op[df_op['OPERARIO'] == op_acta]['MATERIAL'].unique())
+                cant_acta = c2.number_input("Cantidad gastada", min_value=1, step=1)
+                
+                if st.form_submit_button("💾 Guardar Acta"):
+                    mask = (df_op['OPERARIO'] == op_acta) & (df_op['MATERIAL'] == mat_acta)
+                    if df_op.loc[mask, 'CANTIDAD'].values[0] >= cant_acta:
+                        st.session_state.data['OPERARIOS'].loc[mask, 'CANTIDAD'] -= cant_acta
+                        reg_acta = pd.DataFrame([{'FECHA': datetime.now().strftime("%d/%m/%Y %H:%M"), 'NUM_ACTA': n_acta, 'OPERARIO': op_acta, 'MATERIAL': mat_acta, 'CANTIDAD': cant_acta}])
+                        st.session_state.data['H_ACTAS'] = pd.concat([st.session_state.data['H_ACTAS'], reg_acta], ignore_index=True)
+                        st.success("✅ Acta guardada")
+                        st.rerun()
+                    else: st.error("El operario no tiene suficiente material")
 
     with t3:
-        c1, c2, c3 = st.columns(3)
-        c1.write("**Materiales ITA**"); c1.dataframe(st.session_state.data['MATERIALES'], hide_index=True)
-        c2.write("**Accesorios ITA**"); c2.dataframe(st.session_state.data['ACCESORIOS'], hide_index=True)
-        c3.write("**Inventario Triple A**"); c3.dataframe(st.session_state.data['TRIPLE_A'], hide_index=True)
+        st.subheader("Stock actual en manos de operarios")
+        st.dataframe(st.session_state.data['OPERARIOS'][st.session_state.data['OPERARIOS']['CANTIDAD'] > 0], use_container_width=True, hide_index=True)
 
     with t4:
-        st.subheader("Descargar Resultados")
+        c1, c2 = st.columns(2)
+        c1.subheader("📜 Historial de Entregas")
+        c1.dataframe(st.session_state.data['H_ENTREGAS'], hide_index=True)
+        c2.subheader("📜 Historial de Actas")
+        c2.dataframe(st.session_state.data['H_ACTAS'], hide_index=True)
+
+    with t5:
+        st.subheader("Generar Archivo Maestro")
         buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
             st.session_state.data['MATERIALES'].to_excel(writer, sheet_name='MATERIALES ITA', index=False)
             st.session_state.data['ACCESORIOS'].to_excel(writer, sheet_name='ACCESORIOS ITA', index=False)
             st.session_state.data['TRIPLE_A'].to_excel(writer, sheet_name='INVENTARIO TRIPLE A', index=False)
             st.session_state.data['OPERARIOS'].to_excel(writer, sheet_name='OPERARIOS', index=False)
-        
-        st.download_button("📥 Descargar Excel Actualizado", buffer.getvalue(), "Inventario_ITA_Final.xlsx")
+            st.session_state.data['H_ENTREGAS'].to_excel(writer, sheet_name='HISTORIAL_ENTREGAS', index=False)
+            st.session_state.data['H_ACTAS'].to_excel(writer, sheet_name='HISTORIAL_ACTAS', index=False)
+        st.download_button("📥 Descargar Reporte Completo", buffer.getvalue(), "Inventario_ITA_PRO.xlsx")
 
 else:
-    st.info("👈 Sube tu archivo Excel para activar el sistema.")
+    st.info("👈 Sube tu archivo Excel para comenzar.")
